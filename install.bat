@@ -116,6 +116,9 @@ echo  Downloading assets...
 powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/UnblockR.ico' -OutFile '%INSTALL_DIR%\UnblockR.ico'" >nul 2>nul
 powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png' -OutFile '%INSTALL_DIR%\UnblockR.png'" >nul 2>nul
 
+echo  Creating settings.json...
+powershell -NoProfile -Command "if (-not (Test-Path '%INSTALL_DIR%\settings.json')) { Set-Content '%INSTALL_DIR%\settings.json' '{"window":{"x":120,"y":120,"w":940,"h":620},"disabler_active":false}' }"
+
 echo  [OK] All files saved to %INSTALL_DIR%
 
 :: Step 4: Create shortcuts
