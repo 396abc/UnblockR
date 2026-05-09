@@ -92,17 +92,24 @@ if not exist "%INSTALL_DIR%\main.py" ( echo  [ERROR] Failed to download main.py 
 
 echo  Downloading updater.py...
 powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/updater.py' -OutFile '%INSTALL_DIR%\updater.py'" >nul 2>nul
+if not exist "%INSTALL_DIR%\updater.py" ( echo  [WARN] updater.py download failed - updates will not work )
 
-echo  Downloading launchers...
+echo  Downloading launcher.vbs...
 powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/launcher.vbs' -OutFile '%INSTALL_DIR%\launcher.vbs'" >nul 2>nul
 if not exist "%INSTALL_DIR%\launcher.vbs" (
-    powershell -NoProfile -Command "Set-Content '%INSTALL_DIR%\launcher.vbs' 'Dim sDir : sDir = CreateObject(""Scripting.FileSystemObject"").GetParentFolderName(WScript.ScriptFullName) : CreateObject(""WScript.Shell"").Run ""pythonw """" & sDir & ""\main.py"""", 0, False'"
+    echo  [WARN] Download failed, writing fallback launcher.vbs...
+    echo Dim sDir > "%INSTALL_DIR%\launcher.vbs"
+    echo sDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName) >> "%INSTALL_DIR%\launcher.vbs"
+    echo CreateObject("WScript.Shell").Run "pythonw """ ^& sDir ^& "\main.py""", 0, False >> "%INSTALL_DIR%\launcher.vbs"
 )
 
-echo  Downloading updater launcher...
+echo  Downloading updater_launcher.vbs...
 powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/updater_launcher.vbs' -OutFile '%INSTALL_DIR%\updater_launcher.vbs'" >nul 2>nul
 if not exist "%INSTALL_DIR%\updater_launcher.vbs" (
-    powershell -NoProfile -Command "Set-Content '%INSTALL_DIR%\updater_launcher.vbs' 'Dim sDir : sDir = CreateObject(""Scripting.FileSystemObject"").GetParentFolderName(WScript.ScriptFullName) : CreateObject(""WScript.Shell"").Run ""pythonw """" & sDir & ""\updater.py"""", 0, False'"
+    echo  [WARN] Download failed, writing fallback updater_launcher.vbs...
+    echo Dim sDir > "%INSTALL_DIR%\updater_launcher.vbs"
+    echo sDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName) >> "%INSTALL_DIR%\updater_launcher.vbs"
+    echo CreateObject("WScript.Shell").Run "pythonw """ ^& sDir ^& "\updater.py""", 0, False >> "%INSTALL_DIR%\updater_launcher.vbs"
 )
 
 echo  Downloading assets...
