@@ -67,9 +67,9 @@ if %errorlevel% equ 0 (
     goto DOWNLOAD_FILES
 )
 
-pip install pywebview --upgrade
+pip install pywebview psutil --upgrade
 if %errorlevel% equ 0 goto PKGS_DONE
-python -m pip install pywebview --upgrade
+python -m pip install pywebview psutil --upgrade
 if %errorlevel% equ 0 goto PKGS_DONE
 
 echo  [ERROR] Failed to install packages. Run manually: pip install pywebview
@@ -99,8 +99,8 @@ powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/launcher.vbs
 if not exist "%INSTALL_DIR%\launcher.vbs" (
     echo  [WARN] Download failed, writing fallback launcher.vbs...
     echo Dim sDir > "%INSTALL_DIR%\launcher.vbs"
-    echo sDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName) >> "%INSTALL_DIR%\launcher.vbs"
-    echo CreateObject("WScript.Shell").Run "pythonw """ ^& sDir ^& "\main.py""", 0, False >> "%INSTALL_DIR%\launcher.vbs"
+    echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%INSTALL_DIR%\launcher.vbs"
+    echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\main.py" ^& Chr^(34^), 0, False >> "%INSTALL_DIR%\launcher.vbs"
 )
 
 echo  Downloading updater_launcher.vbs...
@@ -108,8 +108,8 @@ powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/updater_laun
 if not exist "%INSTALL_DIR%\updater_launcher.vbs" (
     echo  [WARN] Download failed, writing fallback updater_launcher.vbs...
     echo Dim sDir > "%INSTALL_DIR%\updater_launcher.vbs"
-    echo sDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName) >> "%INSTALL_DIR%\updater_launcher.vbs"
-    echo CreateObject("WScript.Shell").Run "pythonw """ ^& sDir ^& "\updater.py""", 0, False >> "%INSTALL_DIR%\updater_launcher.vbs"
+    echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%INSTALL_DIR%\updater_launcher.vbs"
+    echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\updater.py" ^& Chr^(34^), 0, False >> "%INSTALL_DIR%\updater_launcher.vbs"
 )
 
 echo  Downloading assets...
