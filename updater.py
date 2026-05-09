@@ -153,6 +153,22 @@ class UpdaterAPI:
         time.sleep(0.5)
         os._exit(0)
 
+    def go_back(self):
+        """Close updater and reopen main window."""
+        try:
+            # Tell main.py to show itself again via a flag file
+            flag = APP_DIR / ".reopen_main"
+            flag.touch()
+            # Launch main via its launcher
+            vbs = APP_DIR / "launcher.vbs"
+            if vbs.exists():
+                subprocess.Popen(["wscript.exe", str(vbs)], shell=False)
+            else:
+                subprocess.Popen([sys.executable, str(APP_DIR / "main.py")], shell=False)
+        except Exception:
+            pass
+        os._exit(0)
+
     def close(self):
         os._exit(0)
 
@@ -327,6 +343,7 @@ HTML = r"""<!DOCTYPE html>
     <div class="titlebar-word">Unblock<span class="r">R</span></div>
     <span class="titlebar-sub">Updater</span>
   </div>
+  <button class="back-btn" onclick="doBack()">&#x2190; Back</button>
   <button class="close-btn" onclick="doClose()">&#x2715;</button>
 </div>
 
