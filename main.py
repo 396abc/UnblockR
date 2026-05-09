@@ -684,7 +684,7 @@ HTML = r"""<!DOCTYPE html>
   .disabler-title { font-family:var(--display); font-size:15px; font-weight:700; color:var(--text); }
   .disabler-badge {
     display:inline-flex; align-items:center; gap:5px;
-    padding:2px 10px; border-radius:100px; font-size:10px; font-weight:500;
+    padding:2px 10px; border-radius:100px; font-size:8px; font-weight:500;
   }
   .disabler-badge.off { background:var(--off-dim); border:1px solid rgba(229,80,80,0.2); color:var(--off); }
   .disabler-badge.on  { background:var(--on-dim);  border:1px solid rgba(0,229,160,0.25); color:var(--on); }
@@ -796,7 +796,7 @@ HTML = r"""<!DOCTYPE html>
               <div class="disabler-title">Linewize Disabler</div>
               <span class="disabler-badge off" id="dis-badge">&#x25CF; Inactive</span>
             </div>
-            <div class="disabler-desc">Manipulates Chrome extensions with Linewize removers and kills Chrome. Required before activating the proxy. Use the restore button to reverse.</div>
+            <div class="disabler-desc">Manipulates Chrome extensions and closes Chrome. Required before activating the proxy. Use the restore button to reverse.</div>
             <div class="disabler-btns">
               <button class="dis-btn activate" id="dis-activate-btn" onclick="activateDisabler()">Activate</button>
               <button class="dis-btn restore" id="dis-restore-btn" onclick="restoreDisabler()" style="display:none">Restore Extensions</button>
