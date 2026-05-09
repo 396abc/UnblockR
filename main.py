@@ -42,17 +42,7 @@ PROXY_BYPASS = "localhost;127.*;192.168.*;<local>"
 DASH_URL     = f"http://{PROXY_IP}:8081/api/stats"
 
 # ── Assets ─────────────────────────────────────────────────────────────────────
-def ensure_assets()
-
-# If relaunched by updater back button, just show — don't need special handling
-# since window.show() is called directly via reopen() API when main stays open.
-# Clean up any stale flag file from previous updater session.
-_flag = APP_DIR / ".reopen_main"
-if _flag.exists():
-    try:
-        _flag.unlink()
-    except Exception:
-        pass:
+def ensure_assets():
     for url, path in [(ICON_URL, ICON_PATH), (LOGO_URL, LOGO_PATH)]:
         if not path.exists():
             try:
@@ -61,6 +51,14 @@ if _flag.exists():
                 pass
 
 ensure_assets()
+
+# Clean up stale reopen flag from previous updater session
+_flag = APP_DIR / ".reopen_main"
+if _flag.exists():
+    try:
+        _flag.unlink()
+    except Exception:
+        pass
 
 def logo_b64():
     if LOGO_PATH.exists():
