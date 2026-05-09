@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 UnblockR - main.py
-GUI client for the UnblockR proxy network.
+GUI client for UnblockR.
 Runs via launcher.vbs (hidden console).
 """
 
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 
 import sys
 import os
@@ -742,9 +742,9 @@ HTML = r"""<!DOCTYPE html>
   <div class="error-icon">&#x26A0;</div>
   <div class="error-title">Server Unreachable</div>
   <div class="error-sub">
-    Could not connect to the UnblockR server.<br><br>
+    Could not connect to UnblockR.<br><br>
     The server may be offline or you may not be on the correct network.
-    The proxy has not been activated.
+    UnblockR has not been activated.
   </div>
   <div class="error-actions">
     <button class="retry-btn" onclick="retryToggle()">&#x21BA;&nbsp; Retry</button>
@@ -762,7 +762,7 @@ HTML = r"""<!DOCTYPE html>
     <div class="titlebar-right">
       <div class="server-pill">
         <div class="dot" id="server-dot"></div>
-        <span>UnblockR Server</span>
+        <span>UnblockR Status</span>
       </div>
       <button class="close-btn" onclick="closeApp()">&#x2715;</button>
     </div>
@@ -793,10 +793,10 @@ HTML = r"""<!DOCTYPE html>
           <!-- Placeholder Disabler -->
           <div class="disabler-card" id="disabler-card">
             <div class="disabler-header">
-              <div class="disabler-title">Placeholder Disabler</div>
+              <div class="disabler-title">Linewize Disabler</div>
               <span class="disabler-badge off" id="dis-badge">&#x25CF; Inactive</span>
             </div>
-            <div class="disabler-desc">Replaces Chrome extensions with placeholders and kills Chrome. Required before activating the proxy. Use the restore button to reverse.</div>
+            <div class="disabler-desc">Manipulates Chrome extensions with Linewize removers and kills Chrome. Required before activating the proxy. Use the restore button to reverse.</div>
             <div class="disabler-btns">
               <button class="dis-btn activate" id="dis-activate-btn" onclick="activateDisabler()">Activate</button>
               <button class="dis-btn restore" id="dis-restore-btn" onclick="restoreDisabler()" style="display:none">Restore Extensions</button>
@@ -812,12 +812,12 @@ HTML = r"""<!DOCTYPE html>
           </div>
 
           <div class="toggle-card" id="toggle-card">
-            <div class="status-label">Proxy Status</div>
+            <div class="status-label">Active Unblocker</div>
             <div class="status-value off" id="status-val">INACTIVE</div>
-            <div class="status-desc" id="status-desc">Traffic is routing directly. Click to activate UnblockR.</div>
+            <div class="status-desc" id="status-desc">Removes the annyoing 'domain has been blocked'.</div>
             <button class="toggle-btn activate" id="toggle-btn" onclick="toggleProxy()" disabled>
               <span class="btn-dot"></span>
-              <span id="toggle-label">Activate Proxy</span>
+              <span id="toggle-label">Activate UnblockR</span>
             </button>
           </div>
 
@@ -838,7 +838,7 @@ HTML = r"""<!DOCTYPE html>
 
           <div class="info-strip">
             <span>&#x2B21;</span>
-            <span>Connected to <code>UnblockR Server</code></span>
+            <span>Connect to<code>UnblockR</code></span>
             &nbsp;·&nbsp;
             <span>Covers all WinINet apps (Chrome, Edge, Discord, Steam)</span>
           </div>
@@ -885,13 +885,12 @@ HTML = r"""<!DOCTYPE html>
           </div>
           <div class="about-ver">Version <span id="about-ver">—</span></div>
           <div class="about-body">
-            UnblockR routes your traffic through a filtering proxy server,
-            blocking adult content, gambling, malware, and other inappropriate
+            UnblockR unblocks all appropriate content like AI and games, but
+            blocks adult content, gambling, malware, and other inappropriate
             sites across all apps on your device.
           </div>
           <div class="divider"></div>
-          <div class="kv-row"><span class="kv-key">Server</span><span class="kv-val">UnblockR Server</span></div>
-          <div class="kv-row"><span class="kv-key">Filter</span><span class="kv-val">StevenBlack + custom blacklist</span></div>
+          <div class="kv-row"><span class="kv-key">Server</span><span class="kv-val">UnblockR</span></div>
           <div class="kv-row"><span class="kv-key">Coverage</span><span class="kv-val">HTTP + HTTPS (domain level)</span></div>
           <div class="kv-row"><span class="kv-key">Safe search</span><span class="kv-val">Google · Bing · YouTube · DDG · Yahoo</span></div>
           <div class="kv-row"><span class="kv-key">Built by</span><span class="kv-val">396abc</span></div>
@@ -1031,7 +1030,7 @@ HTML = r"""<!DOCTYPE html>
       desc.textContent = 'All system traffic is routed through UnblockR.';
       btn.className   = 'toggle-btn deactivate';
       btn.disabled    = false;
-      label.textContent = 'Deactivate Proxy';
+      label.textContent = 'Deactivate UnblockR';
     } else {
       card.className  = 'toggle-card';
       val.className   = 'status-value off';
@@ -1063,7 +1062,7 @@ HTML = r"""<!DOCTYPE html>
     
     // Check if disabler is active before trying to activate proxy
     if (!proxyActive && !disActive) {
-      showWarningToast('Enable Placeholder Disabler before connecting');
+      showWarningToast('Enable Linewize Disabler before connecting');
       return;
     }
     
