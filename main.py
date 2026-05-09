@@ -5,7 +5,7 @@ GUI client for the UnblockR proxy network.
 Runs via launcher.vbs (hidden console).
 """
 
-VERSION = "1.0.1"
+VERSION = "1.0.12"
 
 import sys
 import os
