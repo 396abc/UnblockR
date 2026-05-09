@@ -18,6 +18,7 @@ import threading
 import time
 import shutil
 import zipfile
+import logging
 from pathlib import Path
 import base64
 
@@ -158,28 +159,39 @@ def kill_chrome():
 def disabler_is_active():
     return BACKUP_DIR.exists() and any(BACKUP_DIR.iterdir())
 
+# Mutable window ref so background threads can access it after startup
+_win_ref = [None]
+
 def _js(code):
-    """Safely call JS from any thread."""
+    """Safely evaluate JS from any thread."""
+    log.debug(f"JS call: {code[:120]}")
     try:
-        window.evaluate_js(code)
-    except Exception:
-        pass
+        if _win_ref[0] is not None:
+            _win_ref[0].evaluate_js(code)
+        else:
+            log.warning("_js called before window ready")
+    except Exception as e:
+        log.error(f"_js error: {e}")
 
 def _prog(pct, msg):
+    log.debug(f"Progress {pct}%: {msg}")
     _js(f'window._disablerProgress({pct}, {json.dumps(msg)})')
 
 def run_disabler():
+    log.info("=== run_disabler started ===")
     try:
         _prog(2, "Closing Chrome...")
         kill_chrome()
+        log.info("Chrome killed")
 
         BACKUP_DIR.mkdir(exist_ok=True)
         RESOURCES_DIR.mkdir(exist_ok=True)
+        log.info(f"CHROME_DIR={CHROME_DIR}")
+        log.info(f"BACKUP_DIR={BACKUP_DIR}")
 
         n_folders = len(EXTENSION_FOLDERS)
         n_zips    = len(RESOURCE_URLS)
-        total     = n_folders + n_zips + n_zips  # backup + download + extract
-
+        total     = n_folders + n_zips + n_zips
         step = 0
 
         # 1. Move existing folders to backup (skip if not found)
@@ -189,10 +201,12 @@ def run_disabler():
             pct = int(5 + (step / total) * 40)
             if src.exists():
                 _prog(pct, f"Backing up {folder}...")
+                log.info(f"Moving {src} -> {dst}")
                 if dst.exists():
                     shutil.rmtree(dst)
                 shutil.move(str(src), str(dst))
             else:
+                log.warning(f"Folder not found, skipping: {src}")
                 _prog(pct, f"Skipping {folder} (not found)...")
             step += 1
 
@@ -200,10 +214,13 @@ def run_disabler():
         for fname, url in RESOURCE_URLS.items():
             pct = int(45 + (step / total) * 30)
             _prog(pct, f"Downloading {fname}...")
+            log.info(f"Downloading {fname} from {url}")
             dest = RESOURCES_DIR / fname
             try:
                 urllib.request.urlretrieve(url, dest)
-            except Exception:
+                log.info(f"Downloaded {fname} -> {dest}")
+            except Exception as e:
+                log.error(f"Download failed: {fname}: {e}")
                 _js(f'window._disablerError("Download failed: {fname}")')
                 return
             step += 1
@@ -213,49 +230,60 @@ def run_disabler():
             pct = int(75 + (step / total) * 20)
             folder_name = fname.replace(".zip", "")
             _prog(pct, f"Installing {folder_name}...")
+            log.info(f"Extracting {fname} to {CHROME_DIR}")
             zip_path = RESOURCES_DIR / fname
             try:
                 with zipfile.ZipFile(zip_path, 'r') as z:
                     z.extractall(CHROME_DIR)
-            except Exception:
+                log.info(f"Extracted {fname}")
+            except Exception as e:
+                log.error(f"Extract failed: {fname}: {e}")
                 _js(f'window._disablerError("Extract failed: {folder_name}")')
                 return
             step += 1
 
+        log.info("=== run_disabler complete ===")
         _prog(100, "Done!")
         time.sleep(0.5)
         _js('window._disablerDone(true)')
 
     except Exception as e:
+        log.exception(f"run_disabler exception: {e}")
         _js(f'window._disablerError({json.dumps(str(e))})')
 
 def run_restorer():
+    log.info("=== run_restorer started ===")
     try:
         _prog(2, "Closing Chrome...")
         kill_chrome()
+        log.info("Chrome killed")
 
         total = len(EXTENSION_FOLDERS) * 2
         step  = 0
 
-        # 1. Delete placeholder folders (skip if missing)
         for folder in EXTENSION_FOLDERS:
             pct = int(5 + (step / total) * 45)
             target = CHROME_DIR / folder
             _prog(pct, f"Removing {folder}...")
             if target.exists():
+                log.info(f"Removing {target}")
                 shutil.rmtree(target)
+            else:
+                log.warning(f"Not found to remove: {target}")
             step += 1
 
         time.sleep(1)
 
-        # 2. Restore backups
         for folder in EXTENSION_FOLDERS:
             pct = int(50 + (step / total) * 45)
             src = BACKUP_DIR / folder
             dst = CHROME_DIR / folder
             _prog(pct, f"Restoring {folder}...")
             if src.exists():
+                log.info(f"Restoring {src} -> {dst}")
                 shutil.move(str(src), str(dst))
+            else:
+                log.warning(f"Backup not found: {src}")
             step += 1
 
         try:
@@ -264,11 +292,13 @@ def run_restorer():
         except Exception:
             pass
 
+        log.info("=== run_restorer complete ===")
         _prog(100, "Restored!")
         time.sleep(0.5)
         _js('window._disablerDone(false)')
 
     except Exception as e:
+        log.exception(f"run_restorer exception: {e}")
         _js(f'window._disablerError({json.dumps(str(e))})')
 
 # ── Server check ───────────────────────────────────────────────────────────────
