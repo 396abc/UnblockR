@@ -592,6 +592,8 @@ HTML = r"""<!DOCTYPE html>
   #auth-screen.visible { display:flex; }
   .auth-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:40px; width:360px; text-align:center; position:relative; }
   .auth-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),transparent); border-radius:16px 16px 0 0; }
+  .auth-close { position:absolute; top:14px; right:14px; width:26px; height:26px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--muted); font-size:14px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
+  .auth-close:hover { background:var(--off-dim); border-color:var(--off); color:var(--off); }
   .auth-logo { width:52px; height:52px; object-fit:contain; margin-bottom:14px; }
   .auth-title { font-family:var(--display); font-size:22px; font-weight:800; color:var(--text); margin-bottom:4px; }
   .auth-title .r { color:var(--accent); }
@@ -774,6 +776,7 @@ HTML = r"""<!DOCTYPE html>
 <!-- Auth screen -->
 <div id="auth-screen">
   <div class="auth-card">
+    <button class="auth-close" id="auth-close-btn" onclick="closeAuthScreen()" style="display:none">&#x2715;</button>
     <img class="auth-logo" id="auth-logo" src="" alt="UnblockR">
     <div class="auth-title">Unblock<span class="r">R</span></div>
     <div class="auth-sub">Sign in to continue</div>
@@ -1072,23 +1075,66 @@ HTML = r"""<!DOCTYPE html>
     }
     await pywebview.api.do_logout();
     applyUserState('', null);
-    document.getElementById('app').classList.remove('visible');
-    document.getElementById('auth-screen').classList.add('visible');
+    // Reset auth form fully
     document.getElementById('auth-username').value = '';
     document.getElementById('auth-password').value = '';
     document.getElementById('auth-error').textContent = '';
+    document.getElementById('auth-submit-btn').disabled = false;
+    document.getElementById('auth-submit-btn').textContent = 'Sign In';
+    switchTab('login');
+    // Show close button since app was already open
+    document.getElementById('auth-close-btn').style.display = 'flex';
+    document.getElementById('app').classList.remove('visible');
+    document.getElementById('auth-screen').classList.add('visible');
+  }
+
+  function closeAuthScreen() {
+    document.getElementById('auth-screen').classList.remove('visible');
+    document.getElementById('app').classList.add('visible');
   }
 
   // ── Subscription update from background poll ───────────────────────────────
   window._onSubUpdate = function(info) {
     updateSubExpiry(info.sub_expires);
-    if (!info.valid) {
+    const btn   = document.getElementById('toggle-btn');
+    const label = document.getElementById('toggle-label');
+    const card  = document.getElementById('toggle-card');
+    const disActive = document.getElementById('disabler-card').classList.contains('active');
+
+    if (!info.valid && !proxyActive) {
+      // Sub expired/removed — make button unavailable and red
+      btn.className   = 'toggle-btn deactivate';
+      btn.disabled    = true;
+      btn.style.borderColor = 'rgba(229,80,80,0.4)';
+      btn.style.background  = 'rgba(229,80,80,0.08)';
+      btn.style.color       = 'var(--off)';
+      btn.style.opacity     = '0.7';
+      label.textContent = 'Unavailable';
+      card.classList.add('locked');
+
       const msgs = {
         subscription_expired: 'Your subscription has expired.',
         no_subscription:      'No active subscription.',
         account_disabled:     'Your account has been disabled.',
       };
       showWarningToast(msgs[info.reason] || 'Subscription issue — contact admin.');
+
+    } else if (info.valid && !proxyActive) {
+      // Sub restored — reset button to default activate state
+      btn.style.borderColor = '';
+      btn.style.background  = '';
+      btn.style.color       = '';
+      btn.style.opacity     = '';
+      if (disActive) {
+        btn.className   = 'toggle-btn activate';
+        btn.disabled    = false;
+        label.textContent = 'Activate UnblockR';
+        card.classList.remove('locked');
+      } else {
+        btn.className   = 'toggle-btn activate';
+        btn.disabled    = true;
+        label.textContent = 'Activate UnblockR';
+      }
     }
   };
 
