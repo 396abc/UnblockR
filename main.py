@@ -5,7 +5,7 @@ GUI client for UnblockR.
 Runs via launcher.vbs (hidden console).
 """
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 import sys
 import os
@@ -1037,7 +1037,7 @@ HTML = r"""<!DOCTYPE html>
       val.textContent = 'INACTIVE';
       desc.textContent = 'Traffic is routing directly. Click to activate UnblockR.';
       btn.className   = 'toggle-btn activate';
-      label.textContent = 'Activate Proxy';
+      label.textContent = 'Activate UnblockR';
       // keep disabled state based on disabler
       const disActive = document.getElementById('disabler-card').classList.contains('active');
       btn.disabled = !disActive;
