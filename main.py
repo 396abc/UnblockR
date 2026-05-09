@@ -10,11 +10,10 @@ import os
 import json
 import winreg
 import ctypes
-import threading
 import subprocess
 import urllib.request
-import urllib.error
 from pathlib import Path
+import base64
 
 try:
     import webview
@@ -48,9 +47,6 @@ def ensure_assets():
                 pass
 
 ensure_assets()
-
-# ── Embed logo as base64 for use in HTML ───────────────────────────────────────
-import base64
 
 def logo_b64():
     if LOGO_PATH.exists():
@@ -115,7 +111,7 @@ def disable_proxy():
     _reg_set("ProxyEnable", 0, winreg.REG_DWORD)
     _notify_windows()
 
-# ── Connectivity check ─────────────────────────────────────────────────────────
+# ── Connectivity check (only used when toggling ON) ───────────────────────────
 def check_server(timeout=4):
     try:
         req = urllib.request.urlopen(DASH_URL, timeout=timeout)
@@ -124,55 +120,45 @@ def check_server(timeout=4):
     except Exception:
         return False, {}
 
-# ── Python API exposed to JS ───────────────────────────────────────────────────
+# ── API ────────────────────────────────────────────────────────────────────────
 class API:
     def __init__(self):
         self.settings = load_settings()
 
-    def ping_server(self):
-        ok, data = check_server()
+    def startup(self):
+        """Called on app open — does NOT check server, just returns local state."""
         return {
-            "online":       ok,
             "proxy_active": proxy_is_active(),
-            "stats":        data,
             "version":      VERSION,
             "logo":         logo_b64(),
         }
 
     def toggle_proxy(self):
+        """Toggle proxy. If turning ON, check server first."""
         if proxy_is_active():
             disable_proxy()
-            active = False
+            return {"proxy_active": False, "online": None, "stats": {}, "error": None}
         else:
+            ok, data = check_server(timeout=5)
+            if not ok:
+                return {"proxy_active": False, "online": False, "stats": {}, "error": "server_unreachable"}
             enable_proxy()
-            active = True
-        return {"proxy_active": active}
+            return {"proxy_active": True, "online": True, "stats": data, "error": None}
 
-    def get_state(self):
+    def get_stats(self):
+        """Refresh stats from server — only called when proxy is already active."""
         ok, data = check_server(timeout=3)
-        return {
-            "online":       ok,
-            "proxy_active": proxy_is_active(),
-            "stats":        data,
-        }
-
-    def retry_connection(self):
-        ok, data = check_server(timeout=5)
-        return {
-            "online":       ok,
-            "proxy_active": proxy_is_active(),
-            "stats":        data,
-        }
+        return {"online": ok, "stats": data}
 
     def close(self):
-        s = self.settings
         try:
             pos  = window.get_position()
             size = window.get_size()
+            s = self.settings
             s["window"] = {"x": pos[0], "y": pos[1], "w": size[0], "h": size[1]}
+            save_settings(s)
         except Exception:
             pass
-        save_settings(s)
         os._exit(0)
 
 # ── HTML ───────────────────────────────────────────────────────────────────────
@@ -216,18 +202,14 @@ HTML = r"""<!DOCTYPE html>
 
   body::after {
     content: '';
-    position: fixed;
-    inset: 0;
+    position: fixed; inset: 0;
     background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
-    pointer-events: none;
-    z-index: 999;
-    opacity: 0.35;
+    pointer-events: none; z-index: 999; opacity: 0.35;
   }
 
   /* ── Loader ── */
   #loader {
-    position: fixed; inset: 0;
-    background: var(--bg);
+    position: fixed; inset: 0; background: var(--bg);
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     z-index: 998;
@@ -236,22 +218,18 @@ HTML = r"""<!DOCTYPE html>
   #loader.fade-out { opacity:0; transform:scale(1.02); pointer-events:none; }
 
   .loader-logo {
-    width: 72px; height: 72px;
-    object-fit: contain;
+    width: 72px; height: 72px; object-fit: contain;
     margin-bottom: 20px;
     animation: float 3s ease-in-out infinite;
   }
-  @keyframes float {
-    0%,100% { transform: translateY(0); }
-    50%      { transform: translateY(-6px); }
-  }
+  @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
 
-  .loader-name {
+  .loader-wordmark {
     font-family: var(--display);
     font-size: 28px; font-weight: 800;
-    color: var(--text); margin-bottom: 4px;
-    letter-spacing: -0.5px;
+    color: var(--text); margin-bottom: 4px; letter-spacing: -0.5px;
   }
+  .loader-wordmark .r { color: var(--accent); }
 
   .loader-sub {
     font-size: 11px; color: var(--muted);
@@ -272,17 +250,19 @@ HTML = r"""<!DOCTYPE html>
   }
   .loader-status { font-size: 11px; color: var(--muted); letter-spacing: 0.06em; min-height: 16px; }
 
-  /* ── Error ── */
-  #error-screen {
-    position: fixed; inset: 0; background: var(--bg);
+  /* ── Error overlay (shown over app, not full screen) ── */
+  #error-overlay {
+    position: fixed; inset: 0; background: rgba(7,10,15,0.92);
     display: none; flex-direction: column;
-    align-items: center; justify-content: center; z-index: 997;
+    align-items: center; justify-content: center; z-index: 500;
+    backdrop-filter: blur(4px);
   }
-  #error-screen.visible { display: flex; }
+  #error-overlay.visible { display: flex; }
 
-  .error-logo { width: 56px; height: 56px; object-fit: contain; margin-bottom: 20px; opacity: 0.5; }
+  .error-icon { font-size: 36px; margin-bottom: 16px; color: var(--off); }
   .error-title { font-family: var(--display); font-size: 20px; font-weight: 700; color: var(--off); margin-bottom: 10px; }
   .error-sub { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.7; max-width: 300px; margin-bottom: 28px; }
+  .error-actions { display: flex; gap: 12px; }
   .retry-btn {
     padding: 11px 28px;
     background: var(--off-dim); border: 1px solid var(--off);
@@ -291,37 +271,39 @@ HTML = r"""<!DOCTYPE html>
     cursor: pointer; transition: all 0.2s;
   }
   .retry-btn:hover { background: var(--off); color: #fff; }
+  .dismiss-btn {
+    padding: 11px 20px;
+    background: transparent; border: 1px solid var(--border2);
+    border-radius: 8px; color: var(--muted);
+    font-family: var(--mono); font-size: 12px;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .dismiss-btn:hover { color: var(--text); border-color: var(--text); }
 
   /* ── App ── */
-  #app { display: flex; flex-direction: column; height: 100vh; opacity: 0; transition: opacity 0.5s ease; }
+  #app { display: flex; flex-direction: column; height: 100vh; opacity: 0; transition: opacity 0.4s ease; }
   #app.visible { opacity: 1; }
 
   /* titlebar */
   .titlebar {
-    height: 50px;
-    background: var(--surface);
+    height: 50px; background: var(--surface);
     border-bottom: 1px solid var(--border);
     display: flex; align-items: center;
     justify-content: space-between;
     padding: 0 18px 0 16px;
-    -webkit-app-region: drag;
-    flex-shrink: 0;
+    -webkit-app-region: drag; flex-shrink: 0;
   }
 
-  .titlebar-logo {
+  .titlebar-left {
     display: flex; align-items: center; gap: 10px;
     -webkit-app-region: no-drag;
   }
-
-  .titlebar-logo img {
-    width: 26px; height: 26px; object-fit: contain;
-  }
-
-  .titlebar-logo span {
-    font-family: var(--display);
-    font-size: 17px; font-weight: 800;
+  .titlebar-left img { width: 26px; height: 26px; object-fit: contain; }
+  .titlebar-wordmark {
+    font-family: var(--display); font-size: 17px; font-weight: 800;
     color: var(--text); letter-spacing: -0.3px;
   }
+  .titlebar-wordmark .r { color: var(--accent); }
 
   .titlebar-right {
     display: flex; align-items: center; gap: 14px;
@@ -334,8 +316,9 @@ HTML = r"""<!DOCTYPE html>
     background: var(--raised); border: 1px solid var(--border);
     border-radius: 100px; font-size: 11px; color: var(--muted);
   }
-  .server-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--on); animation: blink 2.5s infinite; }
-  .server-pill .dot.off { background: var(--off); animation: none; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .dot.on  { background: var(--on); animation: blink 2.5s infinite; }
+  .dot.off { background: var(--off); }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
   .close-btn {
@@ -356,7 +339,6 @@ HTML = r"""<!DOCTYPE html>
     padding: 20px 0; flex-shrink: 0;
     display: flex; flex-direction: column; gap: 2px;
   }
-
   .nav-item {
     display: flex; align-items: center; gap: 10px;
     padding: 10px 18px; font-size: 12px; color: var(--muted);
@@ -392,25 +374,19 @@ HTML = r"""<!DOCTYPE html>
     position: relative; overflow: hidden; transition: border-color 0.3s;
   }
   .toggle-card::before {
-    content: ''; position: absolute;
-    top: 0; left: 0; right: 0; height: 2px;
+    content: ''; position: absolute; top:0; left:0; right:0; height: 2px;
     background: linear-gradient(90deg, var(--accent), transparent);
     transition: background 0.4s;
   }
   .toggle-card.on::before { background: linear-gradient(90deg, var(--on), transparent); }
   .toggle-card.on { border-color: rgba(0,229,160,0.2); }
 
-  .status-label {
-    font-size: 10px; letter-spacing: 0.1em;
-    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
-  }
+  .status-label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 
-  /* scaled down status value */
   .status-value {
     font-family: var(--display);
     font-size: 28px; font-weight: 800;
-    line-height: 1; margin-bottom: 6px;
-    transition: color 0.3s;
+    line-height: 1; margin-bottom: 6px; transition: color 0.3s;
   }
   .status-value.on  { color: var(--on); }
   .status-value.off { color: var(--text); }
@@ -431,8 +407,8 @@ HTML = r"""<!DOCTYPE html>
   .toggle-btn.activate:hover { box-shadow: 0 8px 24px rgba(0,229,160,0.15); }
   .toggle-btn.deactivate { border-color: rgba(229,80,80,0.4); background: var(--off-dim); color: var(--off); }
   .toggle-btn.deactivate:hover { box-shadow: 0 8px 24px rgba(229,80,80,0.15); }
-  .toggle-btn.loading { opacity: 0.6; pointer-events: none; }
-  .btn-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+  .toggle-btn.loading { opacity:0.6; pointer-events:none; }
+  .btn-dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex-shrink:0; }
 
   .stats-col { display: flex; flex-direction: column; gap: 10px; }
   .stat-card {
@@ -440,12 +416,12 @@ HTML = r"""<!DOCTYPE html>
     border-radius: 10px; padding: 18px 20px;
     position: relative; overflow: hidden;
   }
-  .stat-card::after { content: ''; position: absolute; top:0; left:0; width:3px; height:100%; }
+  .stat-card::after { content:''; position:absolute; top:0; left:0; width:3px; height:100%; }
   .stat-card.green::after { background: var(--on); }
   .stat-card.red::after   { background: var(--off); }
   .stat-card.blue::after  { background: var(--accent); }
-  .stat-label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
-  .stat-val { font-family: var(--display); font-size: 24px; font-weight: 700; line-height: 1; }
+  .stat-label { font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+  .stat-val { font-family:var(--display); font-size:24px; font-weight:700; line-height:1; }
   .stat-card.green .stat-val { color: var(--on); }
   .stat-card.red   .stat-val { color: var(--off); }
   .stat-card.blue  .stat-val { color: var(--accent); }
@@ -455,8 +431,7 @@ HTML = r"""<!DOCTYPE html>
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 10px; padding: 14px 18px;
     display: flex; align-items: center; gap: 8px;
-    font-size: 11px; color: var(--muted);
-    grid-column: 1 / -1;
+    font-size: 11px; color: var(--muted); grid-column: 1 / -1;
   }
   .info-strip code {
     background: var(--raised); border: 1px solid var(--border);
@@ -469,16 +444,17 @@ HTML = r"""<!DOCTYPE html>
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 14px; padding: 32px; max-width: 520px;
   }
-  .about-header { display: flex; align-items: center; gap: 16px; margin-bottom: 6px; }
-  .about-logo { width: 48px; height: 48px; object-fit: contain; }
-  .about-name { font-family: var(--display); font-size: 28px; font-weight: 800; color: var(--text); }
-  .about-ver { font-size: 11px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 20px; }
-  .about-body { font-size: 13px; color: var(--muted); line-height: 1.8; }
-  .divider { height: 1px; background: var(--border); margin: 20px 0; }
-  .kv-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
-  .kv-row:last-child { border-bottom: none; }
-  .kv-key { color: var(--muted); }
-  .kv-val { color: var(--text); font-family: var(--mono); }
+  .about-header { display:flex; align-items:center; gap:16px; margin-bottom:6px; }
+  .about-logo { width:48px; height:48px; object-fit:contain; }
+  .about-name { font-family:var(--display); font-size:28px; font-weight:800; color:var(--text); }
+  .about-name .r { color: var(--accent); }
+  .about-ver { font-size:11px; color:var(--muted); letter-spacing:0.1em; text-transform:uppercase; margin-bottom:20px; }
+  .about-body { font-size:13px; color:var(--muted); line-height:1.8; }
+  .divider { height:1px; background:var(--border); margin:20px 0; }
+  .kv-row { display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--border); font-size:12px; }
+  .kv-row:last-child { border-bottom:none; }
+  .kv-key { color:var(--muted); }
+  .kv-val { color:var(--text); font-family:var(--mono); }
 </style>
 </head>
 <body>
@@ -486,34 +462,38 @@ HTML = r"""<!DOCTYPE html>
 <!-- Loader -->
 <div id="loader">
   <img class="loader-logo" id="loader-img" src="" alt="UnblockR">
-  <div class="loader-name">UnblockR</div>
-  <div class="loader-sub">Connecting to server</div>
+  <div class="loader-wordmark">Unblock<span class="r">R</span></div>
+  <div class="loader-sub">Starting up</div>
   <div class="progress-track"><div class="progress-fill" id="prog"></div></div>
   <div class="loader-status" id="loader-status">Initialising...</div>
 </div>
 
-<!-- Error -->
-<div id="error-screen">
-  <img class="error-logo" id="err-img" src="" alt="">
+<!-- Error overlay (shown when connect attempt fails) -->
+<div id="error-overlay">
+  <div class="error-icon">&#x26A0;</div>
   <div class="error-title">Server Unreachable</div>
   <div class="error-sub">
     Could not connect to the UnblockR server.<br><br>
     The server may be offline or you may not be on the correct network.
+    The proxy has not been activated.
   </div>
-  <button class="retry-btn" onclick="retryConnection()">&#x21BA;&nbsp; Retry Connection</button>
+  <div class="error-actions">
+    <button class="retry-btn" onclick="retryToggle()">&#x21BA;&nbsp; Retry</button>
+    <button class="dismiss-btn" onclick="dismissError()">Dismiss</button>
+  </div>
 </div>
 
 <!-- App -->
 <div id="app">
   <div class="titlebar">
-    <div class="titlebar-logo">
-      <img id="title-img" src="" alt="UnblockR">
-      <span>UnblockR</span>
+    <div class="titlebar-left">
+      <img id="title-img" src="" alt="">
+      <div class="titlebar-wordmark">Unblock<span class="r">R</span></div>
     </div>
     <div class="titlebar-right">
       <div class="server-pill">
         <div class="dot" id="server-dot"></div>
-        <span>UnblockR Server</span>
+        <span id="server-label">UnblockR Server</span>
       </div>
       <button class="close-btn" onclick="closeApp()">&#x2715;</button>
     </div>
@@ -576,7 +556,7 @@ HTML = r"""<!DOCTYPE html>
         <div class="about-card">
           <div class="about-header">
             <img class="about-logo" id="about-img" src="" alt="UnblockR">
-            <div class="about-name">UnblockR</div>
+            <div class="about-name">Unblock<span class="r">R</span></div>
           </div>
           <div class="about-ver">Version <span id="about-ver">—</span></div>
           <div class="about-body">
@@ -598,10 +578,9 @@ HTML = r"""<!DOCTYPE html>
 </div>
 
 <script>
-  let serverOnline = false;
-  let proxyActive  = false;
-  let appVersion   = '—';
-  let logoSrc      = '';
+  let proxyActive = false;
+  let appVersion  = '—';
+  let pendingToggle = false;
 
   function setProgress(pct, msg) {
     document.getElementById('prog').style.width = pct + '%';
@@ -610,19 +589,10 @@ HTML = r"""<!DOCTYPE html>
 
   function applyLogo(src) {
     if (!src) return;
-    logoSrc = src;
-    ['loader-img','err-img','title-img','about-img'].forEach(id => {
+    ['loader-img','title-img','about-img'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.src = src;
     });
-  }
-
-  function showError() {
-    document.getElementById('loader').classList.add('fade-out');
-    setTimeout(() => {
-      document.getElementById('loader').style.display = 'none';
-      document.getElementById('error-screen').classList.add('visible');
-    }, 500);
   }
 
   function showApp() {
@@ -634,45 +604,43 @@ HTML = r"""<!DOCTYPE html>
   }
 
   async function boot() {
-    setProgress(15, 'Connecting to bridge...');
-    await sleep(300);
-    setProgress(35, 'Reaching server...');
+    setProgress(30, 'Loading...');
+    await sleep(200);
+    setProgress(70, 'Applying settings...');
 
     let result;
     try {
-      result = await pywebview.api.ping_server();
+      result = await pywebview.api.startup();
     } catch(e) {
-      showError(); return;
+      setProgress(100, 'Ready.');
+      await sleep(200);
+      showApp();
+      return;
     }
 
     if (result.logo) applyLogo(result.logo);
-    appVersion   = result.version;
-    serverOnline = result.online;
-    proxyActive  = result.proxy_active;
+    appVersion  = result.version;
+    proxyActive = result.proxy_active;
 
-    setProgress(70, 'Verifying connection...');
-    await sleep(400);
-
-    if (!serverOnline) {
-      setProgress(100, 'Server unreachable.');
-      await sleep(400);
-      showError(); return;
-    }
-
-    setProgress(100, 'Connected.');
-    await sleep(350);
-    applyState(result);
+    setProgress(100, 'Ready.');
+    await sleep(250);
+    applyState({ proxy_active: proxyActive, online: proxyActive, stats: {} });
     showApp();
   }
 
   function applyState(result) {
-    serverOnline = result.online;
-    proxyActive  = result.proxy_active;
-    const stats  = result.stats || {};
+    proxyActive = result.proxy_active;
+    const stats = result.stats || {};
+    const online = result.online;
 
-    document.getElementById('server-dot').className = 'dot' + (serverOnline ? '' : ' off');
     document.getElementById('ver-tag').textContent   = appVersion;
     document.getElementById('about-ver').textContent = appVersion;
+
+    // server dot — only lit when proxy is active and server confirmed reachable
+    const dot = document.getElementById('server-dot');
+    if (proxyActive && online) dot.className = 'dot on';
+    else if (!proxyActive)     dot.className = 'dot';
+    else                       dot.className = 'dot off';
 
     const card  = document.getElementById('toggle-card');
     const val   = document.getElementById('status-val');
@@ -702,7 +670,6 @@ HTML = r"""<!DOCTYPE html>
       if (n >= 1000)    return (n/1000).toFixed(1)+'K';
       return String(n);
     }
-
     document.getElementById('stat-allowed').textContent = fmt(stats.allowed);
     document.getElementById('stat-blocked').textContent = fmt(stats.blocked);
     document.getElementById('stat-domains').textContent = fmt(stats.domains_in_blocklist);
@@ -712,33 +679,50 @@ HTML = r"""<!DOCTYPE html>
     const btn   = document.getElementById('toggle-btn');
     const label = document.getElementById('toggle-label');
     btn.classList.add('loading');
-    label.textContent = 'Applying...';
+
+    const turningOn = !proxyActive;
+    label.textContent = turningOn ? 'Connecting...' : 'Deactivating...';
+
     try {
-      await pywebview.api.toggle_proxy();
-      const state = await pywebview.api.get_state();
-      applyState(state);
+      const result = await pywebview.api.toggle_proxy();
+      if (result.error === 'server_unreachable') {
+        showError();
+      } else {
+        applyState(result);
+        // if now active, start polling stats
+        if (result.proxy_active) startStatsPoll();
+        else stopStatsPoll();
+      }
     } catch(e) {
       label.textContent = 'Error';
-      setTimeout(() => applyState({online:serverOnline,proxy_active:proxyActive,stats:{}}), 1500);
+      setTimeout(() => applyState({proxy_active: proxyActive, online: false, stats:{}}), 1500);
     }
     btn.classList.remove('loading');
   }
 
-  async function retryConnection() {
+  function showError() {
+    document.getElementById('error-overlay').classList.add('visible');
+    pendingToggle = true;
+  }
+
+  function dismissError() {
+    document.getElementById('error-overlay').classList.remove('visible');
+    pendingToggle = false;
+  }
+
+  async function retryToggle() {
     const btn = document.querySelector('.retry-btn');
     btn.textContent = 'Checking...';
     btn.style.pointerEvents = 'none';
     try {
-      const result = await pywebview.api.retry_connection();
-      if (result.online) {
-        document.getElementById('error-screen').classList.remove('visible');
-        serverOnline = true;
-        proxyActive  = result.proxy_active;
-        applyState(result);
-        document.getElementById('app').classList.add('visible');
-      } else {
+      const result = await pywebview.api.toggle_proxy();
+      if (result.error === 'server_unreachable') {
         btn.textContent = 'Still offline — Retry';
         btn.style.pointerEvents = '';
+      } else {
+        dismissError();
+        applyState(result);
+        if (result.proxy_active) startStatsPoll();
       }
     } catch(e) {
       btn.textContent = 'Failed — Retry';
@@ -746,6 +730,24 @@ HTML = r"""<!DOCTYPE html>
     }
   }
 
+  // Stats polling — only runs while proxy is active
+  let statsInterval = null;
+
+  function startStatsPoll() {
+    stopStatsPoll();
+    statsInterval = setInterval(async () => {
+      try {
+        const s = await pywebview.api.get_stats();
+        applyState({ proxy_active: proxyActive, online: s.online, stats: s.stats });
+      } catch(e) {}
+    }, 10000);
+  }
+
+  function stopStatsPoll() {
+    if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+  }
+
+  // Nav
   document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', () => {
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -758,11 +760,6 @@ HTML = r"""<!DOCTYPE html>
   function closeApp() { if (window.pywebview) pywebview.api.close(); }
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-  setInterval(async () => {
-    if (!serverOnline) return;
-    try { const s = await pywebview.api.get_state(); applyState(s); } catch(e) {}
-  }, 10000);
-
   window.addEventListener('pywebviewready', boot);
 </script>
 </body>
@@ -771,8 +768,7 @@ HTML = r"""<!DOCTYPE html>
 # ── Entry point ────────────────────────────────────────────────────────────────
 settings = load_settings()
 api      = API()
-
-icon = str(ICON_PATH) if ICON_PATH.exists() else None
+icon     = str(ICON_PATH) if ICON_PATH.exists() else None
 
 window = webview.create_window(
     "UnblockR",
