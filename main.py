@@ -34,6 +34,19 @@ PROXY_PORT  = 8080
 PROXY_ADDR  = f"{PROXY_IP}:{PROXY_PORT}"
 APP_DIR     = Path(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_FILE = APP_DIR / "settings.json"
+
+# ── Logging ────────────────────────────────────────────────────────────────────
+LOG_PATH = APP_DIR / "unblockr.log"
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ]
+)
+log = logging.getLogger("UnblockR")
+
 ICON_PATH   = APP_DIR / "UnblockR.ico"
 LOGO_PATH   = APP_DIR / "UnblockR.png"
 ICON_URL    = "https://github.com/396abc/UnblockR/raw/refs/heads/main/UnblockR.ico"
@@ -108,6 +121,15 @@ def save_settings(d):
     except Exception:
         pass
 
+def set_disabler_state(active: bool):
+    s = load_settings()
+    s["disabler_active"] = active
+    save_settings(s)
+    log.info(f"disabler_active saved as {active}")
+
+def get_disabler_state() -> bool:
+    return load_settings().get("disabler_active", False)
+
 # ── Registry proxy helpers ─────────────────────────────────────────────────────
 def _reg_open(write=False):
     access = winreg.KEY_WRITE if write else winreg.KEY_READ
@@ -157,19 +179,14 @@ def kill_chrome():
         pass
 
 def disabler_is_active():
-    return BACKUP_DIR.exists() and any(BACKUP_DIR.iterdir())
-
-# Mutable window ref so background threads can access it after startup
-_win_ref = [None]
+    return get_disabler_state()
 
 def _js(code):
-    """Safely evaluate JS from any thread."""
+    """Safely evaluate JS from any thread using module-level window."""
     log.debug(f"JS call: {code[:120]}")
     try:
-        if _win_ref[0] is not None:
-            _win_ref[0].evaluate_js(code)
-        else:
-            log.warning("_js called before window ready")
+        window.evaluate_js(code)
+        log.debug("JS call succeeded")
     except Exception as e:
         log.error(f"_js error: {e}")
 
@@ -243,6 +260,7 @@ def run_disabler():
             step += 1
 
         log.info("=== run_disabler complete ===")
+        set_disabler_state(True)
         _prog(100, "Done!")
         time.sleep(0.5)
         _js('window._disablerDone(true)')
@@ -293,6 +311,7 @@ def run_restorer():
             pass
 
         log.info("=== run_restorer complete ===")
+        set_disabler_state(False)
         _prog(100, "Restored!")
         time.sleep(0.5)
         _js('window._disablerDone(false)')
@@ -343,14 +362,26 @@ class API:
 
     def activate_disabler(self):
         log.info("activate_disabler called from JS")
-        t = threading.Thread(target=run_disabler, daemon=True)
+        self._disabler_running = True
+        def _run():
+            try:
+                run_disabler()
+            finally:
+                self._disabler_running = False
+        t = threading.Thread(target=_run, daemon=True)
         t.start()
         log.info(f"Disabler thread started: {t.name}")
         return {"started": True}
 
     def restore_disabler(self):
         log.info("restore_disabler called from JS")
-        t = threading.Thread(target=run_restorer, daemon=True)
+        self._disabler_running = True
+        def _run():
+            try:
+                run_restorer()
+            finally:
+                self._disabler_running = False
+        t = threading.Thread(target=_run, daemon=True)
         t.start()
         log.info(f"Restorer thread started: {t.name}")
         return {"started": True}
@@ -414,6 +445,13 @@ class API:
             pass
 
     def close(self):
+        # Block close if proxy is active or disabler is running
+        if proxy_is_active():
+            log.info("Close blocked — proxy still active")
+            return {"blocked": "proxy"}
+        if self._disabler_running:
+            log.info("Close blocked — disabler running")
+            return {"blocked": "disabler"}
         try:
             pos  = window.get_position()
             size = window.get_size()
@@ -654,6 +692,21 @@ HTML = r"""<!DOCTYPE html>
   .dis-track { height:2px; background:var(--border); border-radius:2px; overflow:hidden; }
   .dis-fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--on)); border-radius:2px; width:0%; transition:width 0.35s cubic-bezier(0.4,0,0.2,1); }
   .dis-error { font-size:11px; color:var(--off); margin-top:8px; display:none; }
+
+  /* ── Toast warning ── */
+  .toast {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--raised); border: 1px solid rgba(229,80,80,0.35);
+    border-radius: 10px; padding: 11px 20px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: var(--text);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    z-index: 600; white-space: nowrap;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast-icon { color: var(--off); font-size: 14px; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -741,7 +794,8 @@ HTML = r"""<!DOCTYPE html>
             <div class="dis-error" id="dis-error"></div>
           </div>
 
-          <div class="toggle-card" id="toggle-card">
+          <div class="toggle-card locked" id="toggle-card">
+            <div class="toggle-lock-overlay" id="toggle-lock-overlay" onclick="showToast()"></div>
             <div class="status-label">Proxy Status</div>
             <div class="status-value off" id="status-val">INACTIVE</div>
             <div class="status-desc" id="status-desc">Traffic is routing directly. Click to activate UnblockR.</div>
@@ -944,6 +998,7 @@ HTML = r"""<!DOCTYPE html>
       val.textContent = 'ACTIVE';
       desc.textContent = 'All system traffic is routed through UnblockR.';
       btn.className   = 'toggle-btn deactivate';
+      btn.disabled    = false;
       label.textContent = 'Deactivate Proxy';
     } else {
       card.className  = 'toggle-card';
@@ -952,6 +1007,9 @@ HTML = r"""<!DOCTYPE html>
       desc.textContent = 'Traffic is routing directly. Click to activate UnblockR.';
       btn.className   = 'toggle-btn activate';
       label.textContent = 'Activate Proxy';
+      // keep disabled state based on disabler
+      const disActive = document.getElementById('disabler-card').classList.contains('active');
+      btn.disabled = !disActive;
     }
 
     function fmt(n) {
@@ -1039,11 +1097,12 @@ HTML = r"""<!DOCTYPE html>
   // ── Nav ───────────────────────────────────────────────────────────────────────
   // ── Disabler ────────────────────────────────────────────────────────────────
   function applyDisablerState(active) {
-    const card       = document.getElementById('disabler-card');
-    const badge      = document.getElementById('dis-badge');
+    const card        = document.getElementById('disabler-card');
+    const badge       = document.getElementById('dis-badge');
     const activateBtn = document.getElementById('dis-activate-btn');
     const restoreBtn  = document.getElementById('dis-restore-btn');
     const toggleBtn   = document.getElementById('toggle-btn');
+    const toggleCard  = document.getElementById('toggle-card');
 
     if (active) {
       card.className  = 'disabler-card active';
@@ -1051,17 +1110,18 @@ HTML = r"""<!DOCTYPE html>
       badge.innerHTML = '&#x25CF; Active';
       activateBtn.style.display = 'none';
       restoreBtn.style.display  = '';
-      // unlock proxy button
       toggleBtn.disabled = false;
+      toggleBtn.title    = '';
+      toggleCard.classList.remove('locked');
     } else {
       card.className  = 'disabler-card';
       badge.className = 'disabler-badge off';
       badge.innerHTML = '&#x25CF; Inactive';
       activateBtn.style.display = '';
       restoreBtn.style.display  = 'none';
-      // lock proxy button
       toggleBtn.disabled = true;
-      toggleBtn.title = 'Activate Placeholder Disabler first';
+      toggleBtn.title    = '';
+      toggleCard.classList.add('locked');
     }
   }
 
@@ -1123,7 +1183,24 @@ HTML = r"""<!DOCTYPE html>
     });
   });
 
-  function closeApp() { if (window.pywebview) pywebview.api.close(); }
+  async function closeApp() {
+    if (!window.pywebview) return;
+    const result = await pywebview.api.close();
+    if (result && result.blocked) {
+      const msgs = {
+        proxy: "Deactivate the proxy before closing.",
+        disabler: "Wait for the process to finish before closing.",
+      };
+      const t = document.getElementById('toast');
+      t.querySelector('span:last-child').textContent = msgs[result.blocked] || "Cannot close right now.";
+      t.classList.add('show');
+      if (_toastTimer) clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => {
+        t.classList.remove('show');
+        t.querySelector('span:last-child').textContent = "Enable Placeholder Disabler before connecting";
+      }, 3000);
+    }
+  }
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   window.addEventListener('pywebviewready', boot);
@@ -1150,5 +1227,8 @@ window = webview.create_window(
     background_color="#070a0f",
 )
 
-api._window_ref = window
+log.info(f"UnblockR v{VERSION} — window ready, starting webview")
+log.info(f"LOG FILE: {LOG_PATH}")
+log.info(f"CHROME_DIR exists: {CHROME_DIR.exists()}")
+log.info(f"APP_DIR: {APP_DIR}")
 webview.start(icon=icon, debug=False)
