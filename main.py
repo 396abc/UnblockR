@@ -5,7 +5,7 @@ GUI client for the UnblockR proxy network.
 Runs via launcher.vbs (hidden console).
 """
 
-VERSION = "1.0.12"
+VERSION = "1.0.0"
 
 import sys
 import os
@@ -42,7 +42,17 @@ PROXY_BYPASS = "localhost;127.*;192.168.*;<local>"
 DASH_URL     = f"http://{PROXY_IP}:8081/api/stats"
 
 # ── Assets ─────────────────────────────────────────────────────────────────────
-def ensure_assets():
+def ensure_assets()
+
+# If relaunched by updater back button, just show — don't need special handling
+# since window.show() is called directly via reopen() API when main stays open.
+# Clean up any stale flag file from previous updater session.
+_flag = APP_DIR / ".reopen_main"
+if _flag.exists():
+    try:
+        _flag.unlink()
+    except Exception:
+        pass:
     for url, path in [(ICON_URL, ICON_PATH), (LOGO_URL, LOGO_PATH)]:
         if not path.exists():
             try:
@@ -194,11 +204,23 @@ class API:
 
     def open_updater(self):
         vbs = APP_DIR / "updater_launcher.vbs"
-        if vbs.exists():
-            subprocess.Popen(["wscript.exe", str(vbs)], shell=False)
-        elif (APP_DIR / "updater.py").exists():
-            subprocess.Popen([sys.executable, str(APP_DIR / "updater.py")], shell=False)
+        try:
+            if vbs.exists():
+                subprocess.Popen(["wscript.exe", str(vbs)], shell=False)
+            elif (APP_DIR / "updater.py").exists():
+                subprocess.Popen([sys.executable, str(APP_DIR / "updater.py")], shell=False)
+            # Hide main window — updater's back button will reopen it
+            window.hide()
+        except Exception:
+            pass
         return {"launched": True}
+
+    def reopen(self):
+        """Called by updater when back button is pressed."""
+        try:
+            window.show()
+        except Exception:
+            pass
 
     def close(self):
         try:
