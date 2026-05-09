@@ -335,10 +335,25 @@ class API:
         # Kick off background version check
         threading.Thread(target=self._bg_version_check, daemon=True).start()
         return {
-            "proxy_active": proxy_is_active(),
-            "version":      VERSION,
-            "logo":         logo_b64(),
+            "proxy_active":    proxy_is_active(),
+            "version":         VERSION,
+            "logo":            logo_b64(),
+            "disabler_active": disabler_is_active(),
         }
+
+    def activate_disabler(self):
+        log.info("activate_disabler called from JS")
+        t = threading.Thread(target=run_disabler, daemon=True)
+        t.start()
+        log.info(f"Disabler thread started: {t.name}")
+        return {"started": True}
+
+    def restore_disabler(self):
+        log.info("restore_disabler called from JS")
+        t = threading.Thread(target=run_restorer, daemon=True)
+        t.start()
+        log.info(f"Restorer thread started: {t.name}")
+        return {"started": True}
 
     def _bg_version_check(self):
         remote = fetch_remote_version()
