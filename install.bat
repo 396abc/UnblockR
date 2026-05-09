@@ -86,27 +86,37 @@ echo  [3/5] Downloading UnblockR files...
 
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
+echo  Downloading main.py...
 powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/main.py' -OutFile '%INSTALL_DIR%\main.py'" >nul 2>nul
 if not exist "%INSTALL_DIR%\main.py" ( echo  [ERROR] Failed to download main.py & pause & exit /b 1 )
 
+echo  Downloading updater.py...
+powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/updater.py' -OutFile '%INSTALL_DIR%\updater.py'" >nul 2>nul
+
+echo  Downloading launchers...
 powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/launcher.vbs' -OutFile '%INSTALL_DIR%\launcher.vbs'" >nul 2>nul
 if not exist "%INSTALL_DIR%\launcher.vbs" (
     powershell -NoProfile -Command "Set-Content '%INSTALL_DIR%\launcher.vbs' 'Dim sDir : sDir = CreateObject(""Scripting.FileSystemObject"").GetParentFolderName(WScript.ScriptFullName) : CreateObject(""WScript.Shell"").Run ""pythonw """" & sDir & ""\main.py"""", 0, False'"
 )
 
+echo  Downloading updater launcher...
+powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/updater_launcher.vbs' -OutFile '%INSTALL_DIR%\updater_launcher.vbs'" >nul 2>nul
+if not exist "%INSTALL_DIR%\updater_launcher.vbs" (
+    powershell -NoProfile -Command "Set-Content '%INSTALL_DIR%\updater_launcher.vbs' 'Dim sDir : sDir = CreateObject(""Scripting.FileSystemObject"").GetParentFolderName(WScript.ScriptFullName) : CreateObject(""WScript.Shell"").Run ""pythonw """" & sDir & ""\updater.py"""", 0, False'"
+)
+
+echo  Downloading assets...
 powershell -NoProfile -Command "Invoke-WebRequest -Uri '%REPO_BASE%/UnblockR.ico' -OutFile '%INSTALL_DIR%\UnblockR.ico'" >nul 2>nul
 powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png' -OutFile '%INSTALL_DIR%\UnblockR.png'" >nul 2>nul
 
-echo  [OK] Files saved to %INSTALL_DIR%
+echo  [OK] All files saved to %INSTALL_DIR%
 
 :: Step 4: Create shortcuts
 echo.
 echo  [4/5] Creating shortcuts...
 
-:: Create shortcut in install dir using PowerShell
 powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%INSTALL_DIR%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""%INSTALL_DIR%\launcher.vbs\""'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.IconLocation = '%INSTALL_DIR%\UnblockR.ico'; $s.Description = 'UnblockR - Filtering Proxy Client'; $s.Save()" >nul 2>nul
 
-:: Create Start Menu shortcut
 if not exist "%START_MENU%\UnblockR" mkdir "%START_MENU%\UnblockR"
 powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%START_MENU%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""%INSTALL_DIR%\launcher.vbs\""'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.IconLocation = '%INSTALL_DIR%\UnblockR.ico'; $s.Description = 'UnblockR - Filtering Proxy Client'; $s.Save()" >nul 2>nul
 
