@@ -149,142 +149,127 @@ def disable_proxy():
 
 # ── Chrome / disabler helpers ─────────────────────────────────────────────────
 def kill_chrome():
-    """Force-quit all Chrome processes."""
     try:
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "chrome.exe"],
-            capture_output=True, timeout=10
-        )
+        subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], capture_output=True, timeout=10)
         time.sleep(1.5)
     except Exception:
         pass
 
-def chrome_running():
-    import psutil
-    for p in psutil.process_iter(['name']):
-        try:
-            if p.info['name'] and 'chrome' in p.info['name'].lower():
-                return True
-        except Exception:
-            pass
-    return False
-
 def disabler_is_active():
-    """Check if backup exists = disabler has been run."""
     return BACKUP_DIR.exists() and any(BACKUP_DIR.iterdir())
 
-def _push_progress(pct, msg):
-    """Push progress update to JS."""
+def _js(code):
+    """Safely call JS from any thread."""
     try:
-        window.evaluate_js(f'window._disablerProgress({pct}, "{msg}")')
+        window.evaluate_js(code)
     except Exception:
         pass
 
+def _prog(pct, msg):
+    _js(f'window._disablerProgress({pct}, {json.dumps(msg)})')
+
 def run_disabler():
-    """
-    1. Kill Chrome
-    2. Move extension folders to backups
-    3. Download + extract replacement zips
-    """
     try:
-        _push_progress(2, "Closing Chrome...")
+        _prog(2, "Closing Chrome...")
         kill_chrome()
 
         BACKUP_DIR.mkdir(exist_ok=True)
         RESOURCES_DIR.mkdir(exist_ok=True)
 
-        total_steps = len(EXTENSION_FOLDERS) + len(RESOURCE_URLS) * 2
+        n_folders = len(EXTENSION_FOLDERS)
+        n_zips    = len(RESOURCE_URLS)
+        total     = n_folders + n_zips + n_zips  # backup + download + extract
+
         step = 0
 
-        # Move existing folders to backup
+        # 1. Move existing folders to backup (skip if not found)
         for folder in EXTENSION_FOLDERS:
             src = CHROME_DIR / folder
             dst = BACKUP_DIR / folder
-            _push_progress(int(5 + (step / total_steps) * 40), f"Backing up {folder}...")
+            pct = int(5 + (step / total) * 40)
             if src.exists():
+                _prog(pct, f"Backing up {folder}...")
                 if dst.exists():
                     shutil.rmtree(dst)
                 shutil.move(str(src), str(dst))
+            else:
+                _prog(pct, f"Skipping {folder} (not found)...")
             step += 1
 
-        # Download replacement zips
+        # 2. Download replacement zips
         for fname, url in RESOURCE_URLS.items():
+            pct = int(45 + (step / total) * 30)
+            _prog(pct, f"Downloading {fname}...")
             dest = RESOURCES_DIR / fname
-            _push_progress(int(45 + (step / total_steps) * 30), f"Downloading {fname}...")
             try:
                 urllib.request.urlretrieve(url, dest)
-            except Exception as e:
-                _push_progress(0, f"Download failed: {fname}")
-                window.evaluate_js('window._disablerError("Download failed: ' + fname + '")')
+            except Exception:
+                _js(f'window._disablerError("Download failed: {fname}")')
                 return
             step += 1
 
-        # Extract zips into Chrome dir
+        # 3. Extract zips into Chrome dir
         for fname in RESOURCE_URLS:
-            zip_path = RESOURCES_DIR / fname
+            pct = int(75 + (step / total) * 20)
             folder_name = fname.replace(".zip", "")
-            _push_progress(int(75 + (step / total_steps) * 20), f"Installing {folder_name}...")
+            _prog(pct, f"Installing {folder_name}...")
+            zip_path = RESOURCES_DIR / fname
             try:
                 with zipfile.ZipFile(zip_path, 'r') as z:
                     z.extractall(CHROME_DIR)
             except Exception:
-                window.evaluate_js('window._disablerError("Extract failed: ' + folder_name + '")')
+                _js(f'window._disablerError("Extract failed: {folder_name}")')
                 return
             step += 1
 
-        _push_progress(100, "Done!")
+        _prog(100, "Done!")
         time.sleep(0.5)
-        window.evaluate_js('window._disablerDone(true)')
+        _js('window._disablerDone(true)')
 
     except Exception as e:
-        window.evaluate_js(f'window._disablerError("{str(e)}")')
+        _js(f'window._disablerError({json.dumps(str(e))})')
 
 def run_restorer():
-    """
-    1. Kill Chrome
-    2. Delete installed extension folders
-    3. Move backups back
-    """
     try:
-        _push_progress(2, "Closing Chrome...")
+        _prog(2, "Closing Chrome...")
         kill_chrome()
 
-        folders = EXTENSION_FOLDERS
-        total = len(folders) * 2
-        step = 0
+        total = len(EXTENSION_FOLDERS) * 2
+        step  = 0
 
-        # Delete the placeholder folders
-        for folder in folders:
+        # 1. Delete placeholder folders (skip if missing)
+        for folder in EXTENSION_FOLDERS:
+            pct = int(5 + (step / total) * 45)
             target = CHROME_DIR / folder
-            _push_progress(int(5 + (step / total) * 45), f"Removing {folder}...")
+            _prog(pct, f"Removing {folder}...")
             if target.exists():
                 shutil.rmtree(target)
             step += 1
 
         time.sleep(1)
 
-        # Restore backups
-        for folder in folders:
+        # 2. Restore backups
+        for folder in EXTENSION_FOLDERS:
+            pct = int(50 + (step / total) * 45)
             src = BACKUP_DIR / folder
             dst = CHROME_DIR / folder
-            _push_progress(int(50 + (step / total) * 45), f"Restoring {folder}...")
+            _prog(pct, f"Restoring {folder}...")
             if src.exists():
                 shutil.move(str(src), str(dst))
             step += 1
 
-        # Clean up backup dir if empty
         try:
             if BACKUP_DIR.exists() and not any(BACKUP_DIR.iterdir()):
                 BACKUP_DIR.rmdir()
         except Exception:
             pass
 
-        _push_progress(100, "Restored!")
+        _prog(100, "Restored!")
         time.sleep(0.5)
-        window.evaluate_js('window._disablerDone(false)')
+        _js('window._disablerDone(false)')
 
     except Exception as e:
-        window.evaluate_js(f'window._disablerError("{str(e)}")')
+        _js(f'window._disablerError({json.dumps(str(e))})')
 
 # ── Server check ───────────────────────────────────────────────────────────────
 def check_server(timeout=4):
@@ -528,7 +513,7 @@ HTML = r"""<!DOCTYPE html>
   .status-value { font-family:var(--display); font-size:28px; font-weight:800; line-height:1; margin-bottom:6px; transition:color 0.3s; }
   .status-value.on  { color:var(--on); }
   .status-value.off { color:var(--text); }
-  .status-desc { font-size:12px; color:var(--muted); margin-bottom:28px; line-height:1.6; }
+  .status-desc { font-size:12px; color:var(--muted); margin-bottom:18px; line-height:1.6; }
   .toggle-btn { display:flex; align-items:center; gap:12px; padding:13px 24px; border-radius:10px; border:1px solid var(--border2); background:var(--raised); color:var(--text); font-family:var(--mono); font-size:13px; font-weight:500; cursor:pointer; transition:all 0.2s cubic-bezier(0.4,0,0.2,1); width:fit-content; }
   .toggle-btn:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,0.3); }
   .toggle-btn.activate { border-color:rgba(0,229,160,0.4); background:var(--on-dim); color:var(--on); }
@@ -584,6 +569,46 @@ HTML = r"""<!DOCTYPE html>
   .kv-row:last-child { border-bottom:none; }
   .kv-key { color:var(--muted); }
   .kv-val { color:var(--text); font-family:var(--mono); }
+
+  /* ── Disabler card ── */
+  .disabler-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 24px 28px;
+    margin-bottom: 18px; position: relative; overflow: hidden;
+  }
+  .disabler-card::before {
+    content: ''; position: absolute; top:0; left:0; right:0; height:2px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+  }
+  .disabler-card.active::before { background: linear-gradient(90deg, var(--on), transparent); }
+  .disabler-card.active { border-color: rgba(0,229,160,0.2); }
+  .disabler-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  .disabler-title { font-family:var(--display); font-size:15px; font-weight:700; color:var(--text); }
+  .disabler-badge {
+    display:inline-flex; align-items:center; gap:5px;
+    padding:2px 10px; border-radius:100px; font-size:10px; font-weight:500;
+  }
+  .disabler-badge.off { background:var(--off-dim); border:1px solid rgba(229,80,80,0.2); color:var(--off); }
+  .disabler-badge.on  { background:var(--on-dim);  border:1px solid rgba(0,229,160,0.25); color:var(--on); }
+  .disabler-desc { font-size:11px; color:var(--muted); line-height:1.6; margin-bottom:16px; }
+  .disabler-btns { display:flex; gap:10px; align-items:center; }
+  .dis-btn {
+    padding:9px 20px; border-radius:8px; font-family:var(--mono);
+    font-size:12px; font-weight:500; cursor:pointer; transition:all 0.2s;
+    border:1px solid var(--border2); background:var(--raised); color:var(--text);
+  }
+  .dis-btn.activate { border-color:rgba(0,229,160,0.4); background:var(--on-dim); color:var(--on); }
+  .dis-btn.activate:hover { background:rgba(0,229,160,0.2); transform:translateY(-1px); }
+  .dis-btn.restore { border-color:rgba(229,80,80,0.4); background:var(--off-dim); color:var(--off); }
+  .dis-btn.restore:hover { background:rgba(229,80,80,0.2); transform:translateY(-1px); }
+  .dis-btn:disabled { opacity:0.4; pointer-events:none; }
+  .dis-progress { margin-top:14px; display:none; }
+  .dis-progress.visible { display:block; }
+  .dis-prog-row { display:flex; justify-content:space-between; font-size:10px; color:var(--muted); margin-bottom:6px; }
+  .dis-prog-pct { color:var(--accent); }
+  .dis-track { height:2px; background:var(--border); border-radius:2px; overflow:hidden; }
+  .dis-fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--on)); border-radius:2px; width:0%; transition:width 0.35s cubic-bezier(0.4,0,0.2,1); }
+  .dis-error { font-size:11px; color:var(--off); margin-top:8px; display:none; }
 </style>
 </head>
 <body>
