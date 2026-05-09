@@ -1002,7 +1002,7 @@ HTML = r"""<!DOCTYPE html>
 
       btn.disabled = false;
       bspinner.style.display = 'none';
-      blabel.textContent = 'Check again';
+      blabel.textContent = 'Open Updater';
     }
   }
 
@@ -1129,7 +1129,7 @@ HTML = r"""<!DOCTYPE html>
     await pywebview.api.open_updater();
     setTimeout(() => {
       btn.disabled = false;
-      document.getElementById('upd-btn-label').textContent = updateAvail ? 'Open Updater' : 'Check again';
+      document.getElementById('upd-btn-label').textContent = updateAvail ? 'Open Updater' : 'Open Updater';
     }, 2000);
   }
 
