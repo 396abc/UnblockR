@@ -343,7 +343,6 @@ HTML = r"""<!DOCTYPE html>
     <div class="titlebar-word">Unblock<span class="r">R</span></div>
     <span class="titlebar-sub">Updater</span>
   </div>
-  <button class="back-btn" onclick="doBack()">&#x2190; Back</button>
   <button class="close-btn" onclick="doClose()">&#x2715;</button>
 </div>
 
