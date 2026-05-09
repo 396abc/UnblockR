@@ -31,7 +31,7 @@ except ImportError:
     import webview
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-PROXY_IP    = "192.168.0.193"
+PROXY_IP    = "unblockr.org"
 PROXY_PORT  = 8080
 PROXY_ADDR  = f"{PROXY_IP}:{PROXY_PORT}"
 APP_DIR     = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -57,8 +57,8 @@ REMOTE_MAIN = "https://raw.githubusercontent.com/396abc/UnblockR/main/main.py"
 
 REG_PATH     = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 PROXY_BYPASS = "localhost;127.*;192.168.*;<local>"
-DASH_URL     = f"http://{PROXY_IP}:8081/api/stats"
-AUTH_URL     = f"http://{PROXY_IP}:8082"
+DASH_URL     = "https://dash.unblockr.org/api/stats"
+AUTH_URL     = "https://auth.unblockr.org"
 
 CHROME_DIR    = Path(os.environ.get("LOCALAPPDATA","")) / "Google/Chrome/User Data/Default"
 BACKUP_DIR    = APP_DIR / "backups"
@@ -872,7 +872,7 @@ HTML = r"""<!DOCTYPE html>
           </div>
 
           <div class="toggle-card locked" id="toggle-card">
-            <div class="toggle-lock-overlay" onclick="showWarningToast('Enable Linewize Disabler before connecting')"></div>
+            <div class="toggle-lock-overlay" onclick="onLockClick()"></div>
             <div class="status-label">Active Unblocker</div>
             <div class="status-value off" id="status-val">INACTIVE</div>
             <div class="status-desc" id="status-desc">Removes the annoying 'domain has been blocked'.</div>
@@ -1163,8 +1163,8 @@ HTML = r"""<!DOCTYPE html>
 
     setProgress(100, 'Ready.');
     await sleep(250);
-    applyDisablerState(result.disabler_active === true);
     applyState({proxy_active:proxyActive, online:proxyActive, stats:{}});
+    applyDisablerState(result.disabler_active === true);
 
     if (result.logged_in) {
       applyUserState(result.username, result.sub_expires);
@@ -1240,20 +1240,30 @@ HTML = r"""<!DOCTYPE html>
   }
 
   // ── Toggle proxy ───────────────────────────────────────────────────────────
+  function onLockClick() {
+    const subEl = document.getElementById('sub-expiry');
+    const subInvalid = subEl.classList.contains('exp') || subEl.classList.contains('none');
+    if (subInvalid) {
+      showWarningToast('No active subscription — contact admin.');
+    } else {
+      showWarningToast('Enable Linewize Disabler before connecting');
+    }
+  }
+
   async function toggleProxy() {
     const btn   = document.getElementById('toggle-btn');
     const label = document.getElementById('toggle-label');
     const disActive = document.getElementById('disabler-card').classList.contains('active');
 
     if (!proxyActive) {
-      // Check subscription first before disabler
+      // Check subscription first
       const subEl = document.getElementById('sub-expiry');
       const subInvalid = subEl.classList.contains('exp') || subEl.classList.contains('none');
       if (subInvalid) {
         showWarningToast('No active subscription — contact admin.');
         return;
       }
-      // Then check disabler
+      // Only show disabler warning if subscription is valid
       if (!disActive) {
         showWarningToast('Enable Linewize Disabler before connecting');
         return;
