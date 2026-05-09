@@ -1244,10 +1244,22 @@ HTML = r"""<!DOCTYPE html>
     const btn   = document.getElementById('toggle-btn');
     const label = document.getElementById('toggle-label');
     const disActive = document.getElementById('disabler-card').classList.contains('active');
-    if (!proxyActive && !disActive) {
-      showWarningToast('Enable Linewize Disabler before connecting');
-      return;
+
+    if (!proxyActive) {
+      // Check subscription first before disabler
+      const subEl = document.getElementById('sub-expiry');
+      const subInvalid = subEl.classList.contains('exp') || subEl.classList.contains('none');
+      if (subInvalid) {
+        showWarningToast('No active subscription — contact admin.');
+        return;
+      }
+      // Then check disabler
+      if (!disActive) {
+        showWarningToast('Enable Linewize Disabler before connecting');
+        return;
+      }
     }
+
     btn.classList.add('loading');
     label.textContent = proxyActive ? 'Deactivating...' : 'Connecting...';
     try {
