@@ -21,6 +21,7 @@ import zipfile
 import logging
 from pathlib import Path
 import base64
+import re
 
 try:
     import webview
@@ -51,7 +52,7 @@ ICON_PATH   = APP_DIR / "UnblockR.ico"
 LOGO_PATH   = APP_DIR / "UnblockR.png"
 ICON_URL    = "https://github.com/396abc/UnblockR/raw/refs/heads/main/UnblockR.ico"
 LOGO_URL    = "https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png"
-REMOTE_MAIN = "https://github.com/396abc/UnblockR/raw/refs/heads/main/main.py"
+REMOTE_MAIN = "https://raw.githubusercontent.com/396abc/UnblockR/main/main.py"
 
 REG_PATH     = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 PROXY_BYPASS = "localhost;127.*;192.168.*;<local>"
@@ -106,7 +107,7 @@ def logo_b64():
 
 # ── Settings ───────────────────────────────────────────────────────────────────
 def load_settings():
-    defaults = {"window": {"x": 120, "y": 120, "w": 960, "h": 620}}
+    defaults = {"window": {"x": 120, "y": 120, "w": 960, "h": 620}, "disabler_active": False}
     try:
         if SETTINGS_FILE.exists():
             d = json.loads(SETTINGS_FILE.read_text())
@@ -332,13 +333,15 @@ def check_server(timeout=4):
 # ── Remote version check ───────────────────────────────────────────────────────
 def fetch_remote_version():
     try:
-        ts  = int(time.time())
-        req = urllib.request.urlopen(f"{REMOTE_MAIN}?t={ts}", timeout=10)
-        for line in req.read().decode("utf-8", errors="ignore").splitlines():
-            if line.strip().startswith("VERSION"):
-                return line.split("=")[1].strip().strip("\"'")
-    except Exception:
-        pass
+        req = urllib.request.Request(REMOTE_MAIN, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            content = response.read().decode("utf-8", errors="ignore")
+            # Look for VERSION = "x.x.x" pattern
+            match = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', content)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        log.error(f"Version check failed: {e}")
     return None
 
 # ── API ────────────────────────────────────────────────────────────────────────
@@ -348,6 +351,9 @@ class API:
         self._remote_ver   = None   # filled by background thread
         self._ver_checked  = False
         self._window_ref   = None
+        self._disabler_running = False
+        # Read initial disabler state from settings
+        self._disabler_active = get_disabler_state()
 
     # ── startup — no server check ──────────────────────────────────────────────
     def startup(self):
@@ -357,7 +363,7 @@ class API:
             "proxy_active":    proxy_is_active(),
             "version":         VERSION,
             "logo":            logo_b64(),
-            "disabler_active": disabler_is_active(),
+            "disabler_active": self._disabler_active,
         }
 
     def activate_disabler(self):
@@ -368,6 +374,7 @@ class API:
                 run_disabler()
             finally:
                 self._disabler_running = False
+                self._disabler_active = get_disabler_state()  # Sync after completion
         t = threading.Thread(target=_run, daemon=True)
         t.start()
         log.info(f"Disabler thread started: {t.name}")
@@ -381,6 +388,7 @@ class API:
                 run_restorer()
             finally:
                 self._disabler_running = False
+                self._disabler_active = get_disabler_state()  # Sync after completion
         t = threading.Thread(target=_run, daemon=True)
         t.start()
         log.info(f"Restorer thread started: {t.name}")
@@ -452,6 +460,13 @@ class API:
         if self._disabler_running:
             log.info("Close blocked — disabler running")
             return {"blocked": "disabler"}
+        # Show closing message
+        try:
+            window.evaluate_js('showClosingToast()')
+            # Give time for the toast to be shown
+            time.sleep(0.5)
+        except Exception:
+            pass
         try:
             pos  = window.get_position()
             size = window.get_size()
@@ -693,11 +708,10 @@ HTML = r"""<!DOCTYPE html>
   .dis-fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--on)); border-radius:2px; width:0%; transition:width 0.35s cubic-bezier(0.4,0,0.2,1); }
   .dis-error { font-size:11px; color:var(--off); margin-top:8px; display:none; }
 
-  /* ── Toast warning ── */
+  /* ── Toast warnings ── */
   .toast {
     position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
-    background: var(--raised); border: 1px solid rgba(229,80,80,0.35);
-    border-radius: 10px; padding: 11px 20px;
+    background: var(--raised); border-radius: 10px; padding: 11px 20px;
     display: flex; align-items: center; gap: 10px;
     font-size: 12px; color: var(--text);
     box-shadow: 0 8px 32px rgba(0,0,0,0.4);
@@ -706,7 +720,10 @@ HTML = r"""<!DOCTYPE html>
     z-index: 600; white-space: nowrap;
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  .toast-icon { color: var(--off); font-size: 14px; flex-shrink: 0; }
+  .toast.warning { border: 1px solid rgba(229,80,80,0.35); }
+  .toast.info { border: 1px solid rgba(61,158,255,0.35); }
+  .toast-icon.warn { color: var(--off); font-size: 14px; flex-shrink: 0; }
+  .toast-icon.info { color: var(--accent); font-size: 14px; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -794,12 +811,11 @@ HTML = r"""<!DOCTYPE html>
             <div class="dis-error" id="dis-error"></div>
           </div>
 
-          <div class="toggle-card locked" id="toggle-card">
-            <div class="toggle-lock-overlay" id="toggle-lock-overlay" onclick="showToast()"></div>
+          <div class="toggle-card" id="toggle-card">
             <div class="status-label">Proxy Status</div>
             <div class="status-value off" id="status-val">INACTIVE</div>
             <div class="status-desc" id="status-desc">Traffic is routing directly. Click to activate UnblockR.</div>
-            <button class="toggle-btn activate" id="toggle-btn" onclick="toggleProxy()">
+            <button class="toggle-btn activate" id="toggle-btn" onclick="toggleProxy()" disabled>
               <span class="btn-dot"></span>
               <span id="toggle-label">Activate Proxy</span>
             </button>
@@ -886,11 +902,25 @@ HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- Warning Toast -->
+<div class="toast warning" id="toast-warning">
+  <span class="toast-icon warn">&#x26A0;</span>
+  <span id="toast-warning-msg">Cannot close right now.</span>
+</div>
+
+<!-- Info Toast (for closing message) -->
+<div class="toast info" id="toast-info">
+  <span class="toast-icon info">&#x2139;</span>
+  <span>Closing...</span>
+</div>
+
 <script>
   let proxyActive  = false;
   let appVersion   = '—';
   let updateAvail  = false;
   let statsInterval = null;
+  let _toastWarningTimer = null;
+  let _toastInfoTimer = null;
 
   // ── Logo ─────────────────────────────────────────────────────────────────────
   function applyLogo(src) {
@@ -919,7 +949,7 @@ HTML = r"""<!DOCTYPE html>
   async function boot() {
     setProgress(30, 'Loading...');
     await sleep(200);
-    setProgress(70, 'Applying settings...');
+    setProgress(70, 'Reading settings...');
 
     let result;
     try { result = await pywebview.api.startup(); }
@@ -936,6 +966,7 @@ HTML = r"""<!DOCTYPE html>
     setProgress(100, 'Ready.');
     await sleep(250);
     applyState({ proxy_active: proxyActive, online: proxyActive, stats: {} });
+    // Apply disabler state from settings
     applyDisablerState(result.disabler_active === true);
     showApp();
   }
@@ -1028,6 +1059,14 @@ HTML = r"""<!DOCTYPE html>
   async function toggleProxy() {
     const btn   = document.getElementById('toggle-btn');
     const label = document.getElementById('toggle-label');
+    const disActive = document.getElementById('disabler-card').classList.contains('active');
+    
+    // Check if disabler is active before trying to activate proxy
+    if (!proxyActive && !disActive) {
+      showWarningToast('Enable Placeholder Disabler before connecting');
+      return;
+    }
+    
     btn.classList.add('loading');
     label.textContent = proxyActive ? 'Deactivating...' : 'Connecting...';
     try {
@@ -1095,7 +1134,6 @@ HTML = r"""<!DOCTYPE html>
     }, 2000);
   }
 
-  // ── Nav ───────────────────────────────────────────────────────────────────────
   // ── Disabler ────────────────────────────────────────────────────────────────
   function applyDisablerState(active) {
     const card        = document.getElementById('disabler-card');
@@ -1103,7 +1141,6 @@ HTML = r"""<!DOCTYPE html>
     const activateBtn = document.getElementById('dis-activate-btn');
     const restoreBtn  = document.getElementById('dis-restore-btn');
     const toggleBtn   = document.getElementById('toggle-btn');
-    const toggleCard  = document.getElementById('toggle-card');
 
     if (active) {
       card.className  = 'disabler-card active';
@@ -1112,8 +1149,6 @@ HTML = r"""<!DOCTYPE html>
       activateBtn.style.display = 'none';
       restoreBtn.style.display  = '';
       toggleBtn.disabled = false;
-      toggleBtn.title    = '';
-      toggleCard.classList.remove('locked');
     } else {
       card.className  = 'disabler-card';
       badge.className = 'disabler-badge off';
@@ -1121,8 +1156,6 @@ HTML = r"""<!DOCTYPE html>
       activateBtn.style.display = '';
       restoreBtn.style.display  = 'none';
       toggleBtn.disabled = true;
-      toggleBtn.title    = '';
-      toggleCard.classList.add('locked');
     }
   }
 
@@ -1175,6 +1208,33 @@ HTML = r"""<!DOCTYPE html>
     document.getElementById('dis-restore-btn').textContent = 'Restore Extensions';
   };
 
+  // ── Toast helpers ──────────────────────────────────────────────────────────
+  function showWarningToast(msg) {
+    const t = document.getElementById('toast-warning');
+    document.getElementById('toast-warning-msg').textContent = msg;
+    t.classList.add('show');
+    if (_toastWarningTimer) clearTimeout(_toastWarningTimer);
+    _toastWarningTimer = setTimeout(() => {
+      t.classList.remove('show');
+    }, 3000);
+  }
+
+  function showInfoToast(msg) {
+    const t = document.getElementById('toast-info');
+    t.querySelector('span:last-child').textContent = msg;
+    t.classList.add('show');
+    if (_toastInfoTimer) clearTimeout(_toastInfoTimer);
+    _toastInfoTimer = setTimeout(() => {
+      t.classList.remove('show');
+    }, 3000);
+  }
+
+  // Exposed to Python for closing message
+  window.showClosingToast = function() {
+    showInfoToast('Closing...');
+  };
+
+  // ── Nav ───────────────────────────────────────────────────────────────────────
   document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', () => {
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -1192,16 +1252,10 @@ HTML = r"""<!DOCTYPE html>
         proxy: "Deactivate the proxy before closing.",
         disabler: "Wait for the process to finish before closing.",
       };
-      const t = document.getElementById('toast');
-      t.querySelector('span:last-child').textContent = msgs[result.blocked] || "Cannot close right now.";
-      t.classList.add('show');
-      if (_toastTimer) clearTimeout(_toastTimer);
-      _toastTimer = setTimeout(() => {
-        t.classList.remove('show');
-        t.querySelector('span:last-child').textContent = "Enable Placeholder Disabler before connecting";
-      }, 3000);
+      showWarningToast(msgs[result.blocked] || "Cannot close right now.");
     }
   }
+  
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   window.addEventListener('pywebviewready', boot);
@@ -1227,6 +1281,9 @@ window = webview.create_window(
     easy_drag=True,
     background_color="#070a0f",
 )
+
+# Set the window reference for the API
+api._window_ref = window
 
 log.info(f"UnblockR v{VERSION} — window ready, starting webview")
 log.info(f"LOG FILE: {LOG_PATH}")
