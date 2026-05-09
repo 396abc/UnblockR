@@ -16,6 +16,8 @@ import subprocess
 import urllib.request
 import threading
 import time
+import shutil
+import zipfile
 from pathlib import Path
 import base64
 
@@ -40,6 +42,28 @@ REMOTE_MAIN = "https://github.com/396abc/UnblockR/raw/refs/heads/main/main.py"
 REG_PATH     = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 PROXY_BYPASS = "localhost;127.*;192.168.*;<local>"
 DASH_URL     = f"http://{PROXY_IP}:8081/api/stats"
+
+CHROME_DIR   = Path(os.environ.get("LOCALAPPDATA","")) / "Google/Chrome/User Data/Default"
+BACKUP_DIR   = APP_DIR / "backups"
+RESOURCES_DIR = APP_DIR / "resources"
+
+EXTENSION_FOLDERS = [
+    "Extension Scripts",
+    "Extensions",
+    "Managed Extension Settings",
+    "Local Extension Settings",
+    "Extension State",
+    "Extension Rules",
+]
+
+RESOURCE_URLS = {
+    "Extension Rules.zip":              "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Extension%20Rules.zip",
+    "Extension Scripts.zip":            "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Extension%20Scripts.zip",
+    "Extension State.zip":              "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Extension%20State.zip",
+    "Extensions.zip":                   "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Extensions.zip",
+    "Local Extension Settings.zip":     "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Local%20Extension%20Settings.zip",
+    "Managed Extension Settings.zip":   "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Managed%20Extension%20Settings.zip",
+}
 
 # ── Assets ─────────────────────────────────────────────────────────────────────
 def ensure_assets():
@@ -122,6 +146,145 @@ def enable_proxy():
 def disable_proxy():
     _reg_set("ProxyEnable", 0, winreg.REG_DWORD)
     _notify_windows()
+
+# ── Chrome / disabler helpers ─────────────────────────────────────────────────
+def kill_chrome():
+    """Force-quit all Chrome processes."""
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "chrome.exe"],
+            capture_output=True, timeout=10
+        )
+        time.sleep(1.5)
+    except Exception:
+        pass
+
+def chrome_running():
+    import psutil
+    for p in psutil.process_iter(['name']):
+        try:
+            if p.info['name'] and 'chrome' in p.info['name'].lower():
+                return True
+        except Exception:
+            pass
+    return False
+
+def disabler_is_active():
+    """Check if backup exists = disabler has been run."""
+    return BACKUP_DIR.exists() and any(BACKUP_DIR.iterdir())
+
+def _push_progress(pct, msg):
+    """Push progress update to JS."""
+    try:
+        window.evaluate_js(f'window._disablerProgress({pct}, "{msg}")')
+    except Exception:
+        pass
+
+def run_disabler():
+    """
+    1. Kill Chrome
+    2. Move extension folders to backups
+    3. Download + extract replacement zips
+    """
+    try:
+        _push_progress(2, "Closing Chrome...")
+        kill_chrome()
+
+        BACKUP_DIR.mkdir(exist_ok=True)
+        RESOURCES_DIR.mkdir(exist_ok=True)
+
+        total_steps = len(EXTENSION_FOLDERS) + len(RESOURCE_URLS) * 2
+        step = 0
+
+        # Move existing folders to backup
+        for folder in EXTENSION_FOLDERS:
+            src = CHROME_DIR / folder
+            dst = BACKUP_DIR / folder
+            _push_progress(int(5 + (step / total_steps) * 40), f"Backing up {folder}...")
+            if src.exists():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.move(str(src), str(dst))
+            step += 1
+
+        # Download replacement zips
+        for fname, url in RESOURCE_URLS.items():
+            dest = RESOURCES_DIR / fname
+            _push_progress(int(45 + (step / total_steps) * 30), f"Downloading {fname}...")
+            try:
+                urllib.request.urlretrieve(url, dest)
+            except Exception as e:
+                _push_progress(0, f"Download failed: {fname}")
+                window.evaluate_js('window._disablerError("Download failed: ' + fname + '")')
+                return
+            step += 1
+
+        # Extract zips into Chrome dir
+        for fname in RESOURCE_URLS:
+            zip_path = RESOURCES_DIR / fname
+            folder_name = fname.replace(".zip", "")
+            _push_progress(int(75 + (step / total_steps) * 20), f"Installing {folder_name}...")
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as z:
+                    z.extractall(CHROME_DIR)
+            except Exception:
+                window.evaluate_js('window._disablerError("Extract failed: ' + folder_name + '")')
+                return
+            step += 1
+
+        _push_progress(100, "Done!")
+        time.sleep(0.5)
+        window.evaluate_js('window._disablerDone(true)')
+
+    except Exception as e:
+        window.evaluate_js(f'window._disablerError("{str(e)}")')
+
+def run_restorer():
+    """
+    1. Kill Chrome
+    2. Delete installed extension folders
+    3. Move backups back
+    """
+    try:
+        _push_progress(2, "Closing Chrome...")
+        kill_chrome()
+
+        folders = EXTENSION_FOLDERS
+        total = len(folders) * 2
+        step = 0
+
+        # Delete the placeholder folders
+        for folder in folders:
+            target = CHROME_DIR / folder
+            _push_progress(int(5 + (step / total) * 45), f"Removing {folder}...")
+            if target.exists():
+                shutil.rmtree(target)
+            step += 1
+
+        time.sleep(1)
+
+        # Restore backups
+        for folder in folders:
+            src = BACKUP_DIR / folder
+            dst = CHROME_DIR / folder
+            _push_progress(int(50 + (step / total) * 45), f"Restoring {folder}...")
+            if src.exists():
+                shutil.move(str(src), str(dst))
+            step += 1
+
+        # Clean up backup dir if empty
+        try:
+            if BACKUP_DIR.exists() and not any(BACKUP_DIR.iterdir()):
+                BACKUP_DIR.rmdir()
+        except Exception:
+            pass
+
+        _push_progress(100, "Restored!")
+        time.sleep(0.5)
+        window.evaluate_js('window._disablerDone(false)')
+
+    except Exception as e:
+        window.evaluate_js(f'window._disablerError("{str(e)}")')
 
 # ── Server check ───────────────────────────────────────────────────────────────
 def check_server(timeout=4):
@@ -487,6 +650,27 @@ HTML = r"""<!DOCTYPE html>
       <!-- Dashboard -->
       <div class="page active" id="page-main">
         <div class="main-grid">
+          <!-- Placeholder Disabler -->
+          <div class="disabler-card" id="disabler-card">
+            <div class="disabler-header">
+              <div class="disabler-title">Placeholder Disabler</div>
+              <span class="disabler-badge off" id="dis-badge">&#x25CF; Inactive</span>
+            </div>
+            <div class="disabler-desc">Replaces Chrome extensions with placeholders and kills Chrome. Required before activating the proxy. Use the restore button to reverse.</div>
+            <div class="disabler-btns">
+              <button class="dis-btn activate" id="dis-activate-btn" onclick="activateDisabler()">Activate</button>
+              <button class="dis-btn restore" id="dis-restore-btn" onclick="restoreDisabler()" style="display:none">Restore Extensions</button>
+            </div>
+            <div class="dis-progress" id="dis-progress">
+              <div class="dis-prog-row">
+                <span id="dis-msg">Starting...</span>
+                <span class="dis-prog-pct" id="dis-pct">0%</span>
+              </div>
+              <div class="dis-track"><div class="dis-fill" id="dis-fill"></div></div>
+            </div>
+            <div class="dis-error" id="dis-error"></div>
+          </div>
+
           <div class="toggle-card" id="toggle-card">
             <div class="status-label">Proxy Status</div>
             <div class="status-value off" id="status-val">INACTIVE</div>
@@ -783,6 +967,83 @@ HTML = r"""<!DOCTYPE html>
   }
 
   // ── Nav ───────────────────────────────────────────────────────────────────────
+  // ── Disabler ────────────────────────────────────────────────────────────────
+  function applyDisablerState(active) {
+    const card       = document.getElementById('disabler-card');
+    const badge      = document.getElementById('dis-badge');
+    const activateBtn = document.getElementById('dis-activate-btn');
+    const restoreBtn  = document.getElementById('dis-restore-btn');
+    const toggleBtn   = document.getElementById('toggle-btn');
+
+    if (active) {
+      card.className  = 'disabler-card active';
+      badge.className = 'disabler-badge on';
+      badge.innerHTML = '&#x25CF; Active';
+      activateBtn.style.display = 'none';
+      restoreBtn.style.display  = '';
+      // unlock proxy button
+      toggleBtn.disabled = false;
+    } else {
+      card.className  = 'disabler-card';
+      badge.className = 'disabler-badge off';
+      badge.innerHTML = '&#x25CF; Inactive';
+      activateBtn.style.display = '';
+      restoreBtn.style.display  = 'none';
+      // lock proxy button
+      toggleBtn.disabled = true;
+      toggleBtn.title = 'Activate Placeholder Disabler first';
+    }
+  }
+
+  async function activateDisabler() {
+    const btn = document.getElementById('dis-activate-btn');
+    btn.disabled = true;
+    btn.textContent = 'Working...';
+    document.getElementById('dis-progress').classList.add('visible');
+    document.getElementById('dis-error').style.display = 'none';
+    await pywebview.api.activate_disabler();
+  }
+
+  async function restoreDisabler() {
+    const btn = document.getElementById('dis-restore-btn');
+    btn.disabled = true;
+    btn.textContent = 'Restoring...';
+    document.getElementById('dis-progress').classList.add('visible');
+    document.getElementById('dis-error').style.display = 'none';
+    // also turn off proxy if active
+    if (proxyActive) {
+      await pywebview.api.toggle_proxy();
+      applyState({ proxy_active: false, online: false, stats: {} });
+    }
+    await pywebview.api.restore_disabler();
+  }
+
+  window._disablerProgress = function(pct, msg) {
+    document.getElementById('dis-fill').style.width = pct + '%';
+    document.getElementById('dis-pct').textContent  = pct + '%';
+    document.getElementById('dis-msg').textContent  = msg;
+  };
+
+  window._disablerDone = function(isActive) {
+    document.getElementById('dis-progress').classList.remove('visible');
+    const btn = isActive
+      ? document.getElementById('dis-activate-btn')
+      : document.getElementById('dis-restore-btn');
+    if (btn) { btn.disabled = false; btn.textContent = isActive ? 'Activate' : 'Restore Extensions'; }
+    applyDisablerState(isActive);
+  };
+
+  window._disablerError = function(msg) {
+    const err = document.getElementById('dis-error');
+    err.textContent = 'Error: ' + msg;
+    err.style.display = 'block';
+    document.getElementById('dis-progress').classList.remove('visible');
+    document.getElementById('dis-activate-btn').disabled = false;
+    document.getElementById('dis-activate-btn').textContent = 'Retry';
+    document.getElementById('dis-restore-btn').disabled = false;
+    document.getElementById('dis-restore-btn').textContent = 'Restore Extensions';
+  };
+
   document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', () => {
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
