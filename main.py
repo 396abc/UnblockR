@@ -936,6 +936,7 @@ HTML = r"""<!DOCTYPE html>
     setProgress(100, 'Ready.');
     await sleep(250);
     applyState({ proxy_active: proxyActive, online: proxyActive, stats: {} });
+    applyDisablerState(result.disabler_active === true);
     showApp();
   }
 
