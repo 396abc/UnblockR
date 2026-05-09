@@ -1163,8 +1163,8 @@ HTML = r"""<!DOCTYPE html>
 
     setProgress(100, 'Ready.');
     await sleep(250);
-    applyState({proxy_active:proxyActive, online:proxyActive, stats:{}});
     applyDisablerState(result.disabler_active === true);
+    applyState({proxy_active:proxyActive, online:proxyActive, stats:{}});
 
     if (result.logged_in) {
       applyUserState(result.username, result.sub_expires);
@@ -1212,6 +1212,7 @@ HTML = r"""<!DOCTYPE html>
     const desc  = document.getElementById('status-desc');
     const btn   = document.getElementById('toggle-btn');
     const label = document.getElementById('toggle-label');
+    const disActive = document.getElementById('disabler-card').classList.contains('active');
     if (proxyActive) {
       card.classList.remove('locked');
       val.className = 'status-value on'; val.textContent = 'ACTIVE';
@@ -1223,7 +1224,6 @@ HTML = r"""<!DOCTYPE html>
       desc.textContent = "Removes the annoying 'domain has been blocked'.";
       btn.className = 'toggle-btn activate';
       label.textContent = 'Activate UnblockR';
-      const disActive = document.getElementById('disabler-card').classList.contains('active');
       btn.disabled = !disActive;
       if (!disActive) card.classList.add('locked');
       else card.classList.remove('locked');
