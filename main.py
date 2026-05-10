@@ -331,8 +331,8 @@ def run_restorer():
 # ── Server check ───────────────────────────────────────────────────────────────
 def check_server(timeout=4):
     try:
-        req  = urllib.request.urlopen(DASH_URL, timeout=timeout)
-        data = json.loads(req.read())
+        req  = urllib.request.Request(DASH_URL, headers={"User-Agent": "Mozilla/5.0"})
+        data = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
         return True, data
     except Exception:
         return False, {}
