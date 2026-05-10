@@ -31,8 +31,8 @@ except ImportError:
     import webview
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-PROXY_IP    = "static.unblockr.org"
-PROXY_PORT  = 8888
+PROXY_IP    = "unblockr.org"
+PROXY_PORT  = 8080
 PROXY_ADDR  = f"{PROXY_IP}:{PROXY_PORT}"
 APP_DIR     = Path(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_FILE = APP_DIR / "settings.json"
@@ -194,10 +194,8 @@ def auth_request(endpoint: str, payload: dict = None, timeout: int = 8):
     try:
         url  = f"{AUTH_URL}{endpoint}"
         data = json.dumps(payload).encode() if payload else None
-        req  = urllib.request.Request(
-            url, data=data,
-            headers={"Content-Type": "application/json"} if data else {}
-        )
+        hdrs = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"} if data else {"User-Agent": "Mozilla/5.0"}
+        req  = urllib.request.Request(url, data=data, headers=hdrs)
         resp = urllib.request.urlopen(req, timeout=timeout)
         return json.loads(resp.read()), None
     except urllib.error.HTTPError as e:
