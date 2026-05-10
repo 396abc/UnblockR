@@ -5,7 +5,7 @@ GUI client for UnblockR.
 Runs via launcher.vbs (hidden console).
 """
 
-VERSION = "1.2.2"
+VERSION = "1.3"
 
 import sys
 import os
@@ -31,7 +31,7 @@ except ImportError:
     import webview
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-PROXY_IP    = "unblockr.org"
+PROXY_IP    = "static.unblockr.org"
 PROXY_PORT  = 8888
 PROXY_ADDR  = f"{PROXY_IP}:{PROXY_PORT}"
 APP_DIR     = Path(os.path.dirname(os.path.abspath(__file__)))
