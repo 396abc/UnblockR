@@ -67,9 +67,9 @@ if %errorlevel% equ 0 (
     goto DOWNLOAD_FILES
 )
 
-pip install pywebview psutil --upgrade
+pip install pywebview psutil websocket-client --upgrade
 if %errorlevel% equ 0 goto PKGS_DONE
-python -m pip install pywebview psutil --upgrade
+python -m pip install pywebview psutil websocket-client --upgrade
 if %errorlevel% equ 0 goto PKGS_DONE
 
 echo  [ERROR] Failed to install packages. Run manually: pip install pywebview
