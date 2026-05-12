@@ -32,7 +32,7 @@ except ImportError:
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 PROXY_IP    = "static.unblockr.org"
-PROXY_PORT  = 8888
+PROXY_PORT  = 443
 PROXY_ADDR  = f"{PROXY_IP}:{PROXY_PORT}"
 APP_DIR     = Path(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_FILE = APP_DIR / "settings.json"
