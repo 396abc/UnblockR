@@ -16,6 +16,8 @@ import subprocess
 import urllib.request
 import urllib.error
 import threading
+import asyncio
+import websocket
 import time
 import shutil
 import zipfile
@@ -31,9 +33,9 @@ except ImportError:
     import webview
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-PROXY_IP    = "static.unblockr.org"
-PROXY_PORT  = 443
-PROXY_ADDR  = f"{PROXY_IP}:{PROXY_PORT}"
+TUNNEL_URL   = "wss://tunnel.unblockr.org"
+LOCAL_PROXY  = "127.0.0.1:19999"
+PROXY_ADDR   = LOCAL_PROXY
 APP_DIR     = Path(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_FILE = APP_DIR / "settings.json"
 
@@ -178,14 +180,14 @@ def _notify_windows():
 
 def proxy_is_active():
     return _reg_get("ProxyEnable") == 1 and _reg_get("ProxyServer") == PROXY_ADDR
-
 def enable_proxy():
+    start_tunnel()
     _reg_set("ProxyEnable", 1, winreg.REG_DWORD)
     _reg_set("ProxyServer", PROXY_ADDR)
     _reg_set("ProxyOverride", PROXY_BYPASS)
     _notify_windows()
-
 def disable_proxy():
+    stop_tunnel()
     _reg_set("ProxyEnable", 0, winreg.REG_DWORD)
     _notify_windows()
 
@@ -373,6 +375,42 @@ def poll_subscription():
                 _js('window._onSubKick()')
         except Exception as e:
             log.debug(f"Sub poll error: {e}")
+
+# ── WebSocket Tunnel ──────────────────────────────────────────────────────────
+_tunnel_ws = None
+_tunnel_thread = None
+
+def _tunnel_run():
+    global _tunnel_ws
+    import socket
+    while True:
+        try:
+            _tunnel_ws = websocket.create_connection(TUNNEL_URL)
+            log.info("Tunnel connected")
+            while True:
+                data = _tunnel_ws.recv()
+                # Data from server — not used in this direction for proxy
+        except Exception as e:
+            log.debug(f"Tunnel error: {e}")
+            time.sleep(3)
+
+def start_tunnel():
+    global _tunnel_thread
+    if _tunnel_thread and _tunnel_thread.is_alive():
+        return
+    _tunnel_thread = threading.Thread(target=_tunnel_run, daemon=True)
+    _tunnel_thread.start()
+    log.info("Tunnel started")
+
+def stop_tunnel():
+    global _tunnel_ws
+    try:
+        if _tunnel_ws:
+            _tunnel_ws.close()
+    except:
+        pass
+    _tunnel_ws = None
+    log.info("Tunnel stopped")
 
 # ── API ────────────────────────────────────────────────────────────────────────
 class API:
