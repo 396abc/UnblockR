@@ -907,7 +907,7 @@ HTML = r"""<!DOCTYPE html>
             <div class="dis-error" id="dis-error"></div>
           </div>
 
-<div class="toggle-card locked" id="toggle-card" style="opacity: 0.6;">
+<div class="toggle-card locked" id="toggle-card">
   <div class="toggle-lock-overlay" onclick="onLockClick()"></div>
 
   <div class="status-label">Active Unblocker</div>
@@ -917,22 +917,29 @@ HTML = r"""<!DOCTYPE html>
   </div>
 
   <button
-    class="toggle-btn activate"
+    class="toggle-btn activate disabled-btn"
     id="toggle-btn"
     onclick="toggleProxy()"
     disabled
-    style="
-      background: #777;
-      color: #ccc;
-      cursor: not-allowed;
-      filter: grayscale(100%);
-      border-color: #666;
-    "
   >
-    <span class="btn-dot" style="background: #bbb;"></span>
-    <span id="toggle-label">(Under maintenance)</span>
+    <span class="btn-dot"></span>
+    <span id="toggle-label">Activate UnblockR</span>
   </button>
 </div>
+
+<style>
+.disabled-btn {
+  background: #666 !important;
+  color: #bdbdbd !important;
+  cursor: not-allowed;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.disabled-btn .btn-dot {
+  background: #999 !important;
+}
+</style>
 
           <div class="stats-col">
             <div class="stat-card green"><div class="stat-label">Allowed</div><div class="stat-val" id="stat-allowed">—</div></div>
