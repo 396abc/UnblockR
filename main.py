@@ -5,7 +5,7 @@ GUI client for UnblockR.
 Runs via launcher.vbs (hidden console).
 """
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 
 import sys
 import os
@@ -907,16 +907,32 @@ HTML = r"""<!DOCTYPE html>
             <div class="dis-error" id="dis-error"></div>
           </div>
 
-          <div class="toggle-card locked" id="toggle-card">
-            <div class="toggle-lock-overlay" onclick="onLockClick()"></div>
-            <div class="status-label">Active Unblocker</div>
-            <div class="status-value off" id="status-val">INACTIVE</div>
-            <div class="status-desc" id="status-desc">Removes the annoying 'domain has been blocked'.</div>
-            <button class="toggle-btn activate" id="toggle-btn" onclick="toggleProxy()" disabled>
-              <span class="btn-dot"></span>
-              <span id="toggle-label">Activate UnblockR</span>
-            </button>
-          </div>
+<div class="toggle-card locked" id="toggle-card" style="opacity: 0.6;">
+  <div class="toggle-lock-overlay" onclick="onLockClick()"></div>
+
+  <div class="status-label">Active Unblocker</div>
+  <div class="status-value off" id="status-val">INACTIVE</div>
+  <div class="status-desc" id="status-desc">
+    Removes the annoying 'domain has been blocked'.
+  </div>
+
+  <button
+    class="toggle-btn activate"
+    id="toggle-btn"
+    onclick="toggleProxy()"
+    disabled
+    style="
+      background: #777;
+      color: #ccc;
+      cursor: not-allowed;
+      filter: grayscale(100%);
+      border-color: #666;
+    "
+  >
+    <span class="btn-dot" style="background: #bbb;"></span>
+    <span id="toggle-label">(Under maintenance)</span>
+  </button>
+</div>
 
           <div class="stats-col">
             <div class="stat-card green"><div class="stat-label">Allowed</div><div class="stat-val" id="stat-allowed">—</div></div>
