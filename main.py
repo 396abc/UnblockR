@@ -642,6 +642,18 @@ class API:
         except Exception:
             pass
 
+def launch_uninstaller(self):
+        vbs = APP_DIR / "uninstall_launcher.vbs"
+        try:
+            if vbs.exists():
+                subprocess.Popen(["wscript.exe", str(vbs)], shell=False)
+            elif (APP_DIR / "uninstall.py").exists():
+                subprocess.Popen([sys.executable, str(APP_DIR / "uninstall.py")], shell=False)
+        except Exception:
+            pass
+        time.sleep(0.5)
+        os._exit(0)
+    
     def close(self):
         if proxy_is_active():
             log.info("Close blocked — proxy still active")
@@ -1043,7 +1055,9 @@ HTML = r"""<!DOCTYPE html>
           <div class="kv-row"><span class="kv-key">Server</span><span class="kv-val" id="about-server">UnblockR</span></div>
           <div class="kv-row"><span class="kv-key">Coverage</span><span class="kv-val">HTTP + HTTPS (domain level)</span></div>
           <div class="kv-row"><span class="kv-key">Safe search</span><span class="kv-val">Google &middot; Bing &middot; YouTube &middot; DDG &middot; Yahoo</span></div>
-          <div class="kv-row"><span class="kv-key">Built by</span><span class="kv-val">396abc</span></div>
+<div class="kv-row"><span class="kv-key">Built by</span><span class="kv-val">396abc</span></div>
+          <div class="divider"></div>
+          <button class="dis-btn restore" id="uninstall-btn" onclick="doUninstall()" style="width:100%;text-align:center;">Uninstall UnblockR</button>
         </div>
       </div>
     </div>
@@ -1598,6 +1612,17 @@ HTML = r"""<!DOCTYPE html>
       const msgs = { proxy:'Deactivate the proxy before closing.', disabler:'Wait for the process to finish before closing.' };
       showWarningToast(msgs[result.blocked] || 'Cannot close right now.');
     }
+  }
+
+async function doUninstall() {
+    if (proxyActive) {
+      showWarningToast('Deactivate the proxy before uninstalling.');
+      return;
+    }
+    const btn = document.getElementById('uninstall-btn');
+    btn.disabled = true;
+    btn.textContent = 'Launching uninstaller...';
+    await pywebview.api.launch_uninstaller();
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
