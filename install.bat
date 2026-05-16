@@ -127,21 +127,25 @@ echo @echo off
 echo title Installing Python 3.13 - Please Wait
 echo echo Installing Python 3.13 via winget...
 echo echo.
-echo winget install -e --id Python.Python.3.13 --silent --accept-source-agreements
+echo winget install -e --id Python.Python.3.13 --accept-source-agreements
 echo if !errorlevel! equ 0 ^(
 echo     echo.
 echo     echo [SUCCESS] Python 3.13 has been installed successfully^^!
 echo ^) else ^(
 echo     echo.
-echo     echo [ERROR] Python installation failed. Please install manually from python.org
+echo     echo [NOTE] Winget may show an error even if Python installed correctly.
+echo     echo Please check if Python 3.13 is now installed on your system.
 echo ^)
 echo echo.
-echo echo You can close this window now and return to the main installer.
-echo timeout /t 5 /nobreak ^>nul
+echo echo If Python installed successfully, you can close this window.
+echo echo If it failed, please install manually from python.org
+echo echo.
+echo echo This window will close in 10 seconds...
+echo timeout /t 10 /nobreak ^>nul
 ) > "%py_install_script%"
 
 :: Open new cmd window with the installation script
-start cmd /k "%py_install_script%"
+start "" cmd /c "%py_install_script%"
 
 :: Manual confirmation loop
 :wait_for_python
@@ -165,21 +169,25 @@ call :t 15 "Verifying Python installation..."
 :: Update PATH to include Python paths
 set "PATH=%PATH%;C:\Program Files\Python313\Scripts;C:\Program Files\Python313;C:\Program Files\Python313\Lib\site-packages\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313"
 
-:: Force refresh environment variables
-call refreshenv >nul 2>nul
-
+:: Check if Python is now available
 python --version >nul 2>nul
-if %errorlevel% equ 0 (
+if !errorlevel! equ 0 (
     for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
     call :t 20 "!pv! ready"
     goto pk
 )
 
-:: Try one more time with full path
-C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\python.exe --version >nul 2>nul
-if %errorlevel% equ 0 (
-    for /f "tokens=*" %%i in ('C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\python.exe --version 2^>^&1') do set pv=%%i
+:: Try checking common installation paths
+if exist "C:\Program Files\Python313\python.exe" (
+    set "PATH=%PATH%;C:\Program Files\Python313;C:\Program Files\Python313\Scripts"
+    for /f "tokens=*" %%i in ('C:\Program Files\Python313\python.exe --version 2^>^&1') do set pv=%%i
+    call :t 20 "!pv! ready"
+    goto pk
+)
+
+if exist "C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\python.exe" (
     set "PATH=%PATH%;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts"
+    for /f "tokens=*" %%i in ('C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\python.exe --version 2^>^&1') do set pv=%%i
     call :t 20 "!pv! ready"
     goto pk
 )
@@ -190,6 +198,15 @@ goto :eof
 ::main
 
 :m
+:: Check if we're already running to prevent re-launch
+set "installer_flag=%TEMP%\ubr_installer_running.flag"
+if exist "%installer_flag%" (
+    echo Installer is already running...
+    timeout /t 2 /nobreak >nul
+    exit /b 0
+)
+echo %DATE% %TIME% > "%installer_flag%"
+
 call :t 0 "Booting up"
 timeout /t 1 >nul
 
@@ -197,7 +214,7 @@ timeout /t 1 >nul
 
 call :t 5 "Checking for Python"
 python --version >nul 2>nul
-if %errorlevel% equ 0 (
+if !errorlevel! equ 0 (
     for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
     call :t 10 "!pv! found"
     goto pk
@@ -273,6 +290,7 @@ echo.
 start "" wscript.exe "%id%\launcher.vbs"
 
 :: Cleanup
+del "%installer_flag%" >nul 2>nul
 set "py_install_script="
 timeout /t 4 /nobreak >nul
 exit /b 0
