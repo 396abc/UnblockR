@@ -204,6 +204,7 @@ echo  %id%
 echo.
 
 start "" wscript.exe "%id%\launcher.vbs"
-start /b "" cmd /c "timeout /t 3 /nobreak >nul & del "%~f0""
+echo CreateObject^("WScript.Shell"^).Run "cmd /c timeout /t 3 /nobreak >nul & del ""%~f0""", 0, False > "%TEMP%\ubr_cleanup.vbs"
+wscript.exe "%TEMP%\ubr_cleanup.vbs"
 timeout /t 4 /nobreak >nul
 exit /b 0
