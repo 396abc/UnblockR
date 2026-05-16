@@ -120,7 +120,7 @@ echo.
 echo Press any key to open the Python installation window...
 pause >nul
 
-:: Create a temporary batch script to run winget in a new window
+:: batch script to install Python using winget
 set "py_install_script=%TEMP%\install_python.bat"
 (
 echo @echo off
@@ -130,10 +130,10 @@ echo echo.
 echo winget install -e --id Python.Python.3.13 --accept-source-agreements
 echo if !errorlevel! equ 0 ^(
 echo     echo.
-echo     echo [SUCCESS] Python 3.13 has been installed successfully^^!
+echo     echo !e![92m[SUCCESS] Python 3.13 has been installed successfully^^!!e![0m
 echo ^) else ^(
 echo     echo.
-echo     echo [NOTE] Winget may show an error even if Python installed correctly.
+echo     !e![93m[NOTE] Python may have installed successfully, but there is a chance it failed.^^!!e![0m
 echo     echo Please check if Python 3.13 is now installed on your system.
 echo ^)
 echo echo.
