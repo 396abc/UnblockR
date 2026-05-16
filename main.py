@@ -474,114 +474,266 @@ def stop_tunnel():
     _tunnel_running = False
     log.info("Tunnel stopped")
 
-# ── API ────────────────────────────────────────────────────────────────────────
+# ── Helper functions for proxy configuration ───────────────────────────────────
+def _set_home_proxy():
+    """Set proxy configuration for HOME plan"""
+    global PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY
+    PROXY_IP = "static.unblockr.org"
+    PROXY_PORT = 8888
+    PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+    TUNNEL_URL = None
+    LOCAL_PROXY = None
+    log.info(f"Home proxy configured: {PROXY_ADDR}")
+
+def _set_premium_proxy():
+    """Set proxy configuration for PREMIUM plan"""
+    global PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY
+    TUNNEL_URL = "wss://tunnel.unblockr.org"
+    LOCAL_PROXY = "127.0.0.1:19999"
+    PROXY_ADDR = LOCAL_PROXY
+    PROXY_IP = "127.0.0.1"
+    PROXY_PORT = 19999
+    log.info(f"Premium proxy configured: {PROXY_ADDR}")
+
+def _clear_proxy_config():
+    """Clear all proxy configuration"""
+    global PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY, USER_PLAN
+    PROXY_IP = None
+    PROXY_PORT = None
+    PROXY_ADDR = None
+    TUNNEL_URL = None
+    LOCAL_PROXY = None
+    USER_PLAN = None
+
+def _apply_plan_config(plan: str):
+    """Apply proxy configuration based on plan type"""
+    if plan == "home":
+        _set_home_proxy()
+    elif plan == "premium":
+        _set_premium_proxy()
+    else:
+        _clear_proxy_config()
+
+# ── API Class ──────────────────────────────────────────────────────────────────
+# ── API Class ──────────────────────────────────────────────────────────────────
 class API:
     def __init__(self):
-        self.settings          = load_settings()
-        self._remote_ver       = None
-        self._ver_checked      = False
-        self._window_ref       = None
+        self.settings = load_settings()
+        self._remote_ver = None
+        self._ver_checked = False
+        self._window_ref = None
         self._disabler_running = False
-        self._disabler_active  = get_disabler_state()
+        self._disabler_active = get_disabler_state()
 
     def startup(self):
-        global USER_TOKEN, USER_PLAN
+        """Initialize the application on startup"""
+        global USER_TOKEN, USER_PLAN, PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY
         threading.Thread(target=self._bg_version_check, daemon=True).start()
-        token    = get_stored_token()
+        
+        token = get_stored_token()
         username = self.settings.get("username", "")
-        logged_in   = False
+        
+        logged_in = False
         sub_expires = None
-        sub_reason  = "no_token"
-        plan        = None
+        sub_reason = "no_token"
+        plan = None
+        proxy_active = False
+        
         if token:
             USER_TOKEN = token
+            # This will set USER_PLAN, PROXY_IP, PROXY_PORT, PROXY_ADDR, etc.
             valid, info = verify_token_sync(token)
-            logged_in   = valid
+            logged_in = valid
             sub_expires = info.get("sub_expires")
-            sub_reason  = info.get("reason", "")
-            plan        = info.get("plan")
-            USER_PLAN   = plan
+            sub_reason = info.get("reason", "")
+            plan = info.get("plan")
+            # USER_PLAN and proxy config are already set by verify_token_sync
+            
             if not valid:
                 log.info(f"Token invalid on startup: {sub_reason}")
+                PROXY_ADDR = None
+        else:
+            log.info("No token found on startup")
+        
+        # Check if proxy is active with current settings
+        if PROXY_ADDR:
+            proxy_active = proxy_is_active()
+            log.info(f"Proxy active status on startup: {proxy_active}")
+        
+        log.info(f"Startup - Plan: {plan}, Proxy_ADDR: {PROXY_ADDR}")
+        
         return {
-            "proxy_active":    proxy_is_active() if PROXY_ADDR else False,
-            "version":         VERSION,
-            "logo":            logo_b64(),
+            "proxy_active": proxy_active,
+            "version": VERSION,
+            "logo": logo_b64(),
             "disabler_active": self._disabler_active,
-            "logged_in":       logged_in,
-            "username":        username if logged_in else "",
-            "sub_expires":     sub_expires,
-            "sub_reason":      sub_reason,
-            "plan":            plan,
+            "logged_in": logged_in,
+            "username": username if logged_in else "",
+            "sub_expires": sub_expires,
+            "sub_reason": sub_reason,
+            "plan": plan,
         }
 
     def do_login(self, username: str, password: str):
-        global USER_TOKEN, USER_PLAN
+        """Handle user login"""
+        global USER_TOKEN, USER_PLAN, PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY
         data, code = auth_request("/auth/login", {"username": username, "password": password})
-        if "token" in data:
-            USER_TOKEN = data["token"]
-            save_token(data["token"], data.get("username", username))
-            plan = data.get("plan")
-            USER_PLAN = plan
-            if plan == "home":
-                global PROXY_IP, PROXY_PORT, PROXY_ADDR
-                PROXY_IP   = "static.unblockr.org"
-                PROXY_PORT = 8888
-                PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
-            elif plan == "premium":
-                global TUNNEL_URL, LOCAL_PROXY
-                TUNNEL_URL  = "wss://tunnel.unblockr.org"
-                LOCAL_PROXY = "127.0.0.1:19999"
-                PROXY_ADDR  = LOCAL_PROXY
-                PROXY_IP    = "127.0.0.1"
-                PROXY_PORT  = 19999
-            return {"success": True, "username": data.get("username", username),
-                    "sub_expires": data.get("sub_expires"), "plan": plan}
-        return {"success": False, "error": data.get("error", "Login failed")}
+        
+        if "token" not in data:
+            return {"success": False, "error": data.get("error", "Login failed")}
+        
+        USER_TOKEN = data["token"]
+        save_token(data["token"], data.get("username", username))
+        plan = data.get("plan")
+        USER_PLAN = plan
+        
+        # Set proxy config based on plan
+        if plan == "home":
+            PROXY_IP = "static.unblockr.org"
+            PROXY_PORT = 8888
+            PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+            TUNNEL_URL = None
+            LOCAL_PROXY = None
+            log.info(f"Home proxy configured: {PROXY_ADDR}")
+        elif plan == "premium":
+            TUNNEL_URL = "wss://tunnel.unblockr.org"
+            LOCAL_PROXY = "127.0.0.1:19999"
+            PROXY_ADDR = LOCAL_PROXY
+            PROXY_IP = "127.0.0.1"
+            PROXY_PORT = 19999
+            log.info(f"Premium proxy configured: {PROXY_ADDR}")
+        else:
+            PROXY_ADDR = None
+            log.info(f"No valid plan: {plan}")
+        
+        return {
+            "success": True,
+            "username": data.get("username", username),
+            "sub_expires": data.get("sub_expires"),
+            "plan": plan,
+        }
 
     def do_signup(self, username: str, password: str):
-        global USER_TOKEN, USER_PLAN
+        """Handle user signup"""
+        global USER_TOKEN, USER_PLAN, PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY
         data, code = auth_request("/auth/signup", {"username": username, "password": password})
-        if "token" in data:
-            USER_TOKEN = data["token"]
-            save_token(data["token"], data.get("username", username))
-            plan = data.get("plan")
-            USER_PLAN = plan
-            return {"success": True, "username": data.get("username", username),
-                    "sub_expires": data.get("sub_expires"), "plan": plan}
-        return {"success": False, "error": data.get("error", "Signup failed")}
+        
+        if "token" not in data:
+            return {"success": False, "error": data.get("error", "Signup failed")}
+        
+        USER_TOKEN = data["token"]
+        save_token(data["token"], data.get("username", username))
+        plan = data.get("plan")
+        USER_PLAN = plan
+        
+        # Set proxy config based on plan
+        if plan == "home":
+            PROXY_IP = "static.unblockr.org"
+            PROXY_PORT = 8888
+            PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+            TUNNEL_URL = None
+            LOCAL_PROXY = None
+        elif plan == "premium":
+            TUNNEL_URL = "wss://tunnel.unblockr.org"
+            LOCAL_PROXY = "127.0.0.1:19999"
+            PROXY_ADDR = LOCAL_PROXY
+            PROXY_IP = "127.0.0.1"
+            PROXY_PORT = 19999
+        else:
+            PROXY_ADDR = None
+        
+        return {
+            "success": True,
+            "username": data.get("username", username),
+            "sub_expires": data.get("sub_expires"),
+            "plan": plan,
+        }
 
     def do_logout(self):
+        """Handle user logout"""
+        global PROXY_ADDR
         clear_token()
+        PROXY_ADDR = None
         return {"success": True}
 
+    # ── Disabler Methods ──────────────────────────────────────────────────────
     def activate_disabler(self):
+        """Activate the Chrome extension disabler"""
         if not USER_PLAN:
             return {"started": False, "error": "no_plan"}
+        
         log.info("activate_disabler called from JS")
         self._disabler_running = True
+        
         def _run():
             try:
                 run_disabler()
             finally:
                 self._disabler_running = False
+        
         threading.Thread(target=_run, daemon=True).start()
         return {"started": True}
 
     def restore_disabler(self):
+        """Restore Chrome extensions from backup"""
         log.info("restore_disabler called from JS")
         self._disabler_running = True
+        
         def _run():
             try:
                 run_restorer()
             finally:
                 self._disabler_running = False
+        
         threading.Thread(target=_run, daemon=True).start()
         return {"started": True}
 
+    # ── Proxy Methods ─────────────────────────────────────────────────────────
+    def toggle_proxy(self):
+        """Toggle the proxy on/off"""
+        if proxy_is_active():
+            disable_proxy()
+            return {"proxy_active": False, "online": None, "stats": {}, "error": None}
+        
+        token = get_stored_token()
+        if not token:
+            return {"proxy_active": False, "online": False, "stats": {}, "error": "not_logged_in"}
+        
+        if not USER_PLAN:
+            return {"proxy_active": False, "online": False, "stats": {}, "error": "no_plan"}
+        
+        valid, info = verify_token_sync(token)
+        if not valid:
+            reason = info.get("reason", "invalid_token")
+            log.info(f"Toggle blocked: {reason}")
+            return {"proxy_active": False, "online": False, "stats": {}, "error": reason}
+        
+        ok, data = check_server(timeout=5)
+        if not ok:
+            return {"proxy_active": False, "online": False, "stats": {}, "error": "server_unreachable"}
+        
+        enable_proxy()
+        return {"proxy_active": True, "online": True, "stats": data, "error": None}
+
+    def get_stats(self):
+        """Get current proxy statistics"""
+        ok, data = check_server(timeout=3)
+        return {"online": ok, "stats": data}
+
+    def get_version_info(self):
+        """Get version information"""
+        return {
+            "local": VERSION,
+            "remote": self._remote_ver or "checking...",
+            "checked": self._ver_checked,
+            "update_avail": self._ver_checked and self._remote_ver is not None and self._remote_ver != VERSION,
+        }
+
+    # ── Background Tasks ──────────────────────────────────────────────────────
     def _bg_version_check(self):
+        """Background version check"""
         remote = fetch_remote_version()
-        self._remote_ver  = remote
+        self._remote_ver = remote
         self._ver_checked = True
         update_avail = remote is not None and remote != VERSION
         try:
@@ -592,39 +744,9 @@ class API:
         except Exception:
             pass
 
-    def toggle_proxy(self):
-        if proxy_is_active():
-            disable_proxy()
-            return {"proxy_active": False, "online": None, "stats": {}, "error": None}
-        token = get_stored_token()
-        if not token:
-            return {"proxy_active": False, "online": False, "stats": {}, "error": "not_logged_in"}
-        if not USER_PLAN:
-            return {"proxy_active": False, "online": False, "stats": {}, "error": "no_plan"}
-        valid, info = verify_token_sync(token)
-        if not valid:
-            reason = info.get("reason", "invalid_token")
-            log.info(f"Toggle blocked: {reason}")
-            return {"proxy_active": False, "online": False, "stats": {}, "error": reason}
-        ok, data = check_server(timeout=5)
-        if not ok:
-            return {"proxy_active": False, "online": False, "stats": {}, "error": "server_unreachable"}
-        enable_proxy()
-        return {"proxy_active": True, "online": True, "stats": data, "error": None}
-
-    def get_stats(self):
-        ok, data = check_server(timeout=3)
-        return {"online": ok, "stats": data}
-
-    def get_version_info(self):
-        return {
-            "local":        VERSION,
-            "remote":       self._remote_ver or "checking...",
-            "checked":      self._ver_checked,
-            "update_avail": self._ver_checked and self._remote_ver is not None and self._remote_ver != VERSION,
-        }
-
+    # ── Utility Methods ───────────────────────────────────────────────────────
     def open_updater(self):
+        """Open the updater"""
         vbs = APP_DIR / "updater_launcher.vbs"
         try:
             if vbs.exists():
@@ -637,12 +759,14 @@ class API:
         return {"launched": True}
 
     def reopen(self):
+        """Reopen the main window"""
         try:
             window.show()
         except Exception:
             pass
 
-def launch_uninstaller(self):
+    def launch_uninstaller(self):
+        """Launch the uninstaller"""
         vbs = APP_DIR / "uninstall_launcher.vbs"
         try:
             if vbs.exists():
@@ -655,6 +779,7 @@ def launch_uninstaller(self):
         os._exit(0)
     
     def close(self):
+        """Close the application"""
         if proxy_is_active():
             log.info("Close blocked — proxy still active")
             return {"blocked": "proxy"}
@@ -667,7 +792,7 @@ def launch_uninstaller(self):
         except Exception:
             pass
         try:
-            pos  = window.get_position()
+            pos = window.get_position()
             size = window.get_size()
             s = self.settings
             s["window"] = {"x": pos[0], "y": pos[1], "w": size[0], "h": size[1]}
@@ -676,7 +801,7 @@ def launch_uninstaller(self):
             pass
         os._exit(0)
 
-# ── HTML ───────────────────────────────────────────────────────────────────────
+# ── HTML (truncated for brevity - same as original) ────────────────────────────
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -700,15 +825,27 @@ HTML = r"""<!DOCTYPE html>
     --off-dim:  rgba(229,80,80,0.12);
     --accent:   #3d9eff;
     --accent-d: rgba(61,158,255,0.1);
+    --premium:  #ffd700;
+    --premium-glow: rgba(255,215,0,0.15);
     --mono:     'DM Mono', monospace;
     --display:  'Syne', sans-serif;
   }
   *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:var(--mono); background:var(--bg); color:var(--text); height:100vh; overflow:hidden; user-select:none; }
-  body::after {
-    content:''; position:fixed; inset:0;
-    background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
-    pointer-events:none; z-index:999; opacity:0.35;
+  body { font-family:var(--mono); background:var(--bg); color:var(--text); height:100vh; overflow:hidden; user-select:none; position:relative; }
+  
+  /* Premium glow effect */
+  @keyframes premiumPulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+  
+  .premium-glow {
+    animation: premiumPulse 2s ease-in-out infinite;
+  }
+
+  #loader, #auth-screen, #error-overlay, #app, .toast {
+    position: relative;
+    z-index: 1;
   }
 
   #loader { position:fixed; inset:0; background:var(--bg); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:998; transition:opacity 0.5s ease, transform 0.5s ease; }
@@ -724,7 +861,7 @@ HTML = r"""<!DOCTYPE html>
 
   #auth-screen { position:fixed; inset:0; background:var(--bg); display:none; align-items:center; justify-content:center; z-index:900; }
   #auth-screen.visible { display:flex; }
-  .auth-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:40px; width:360px; text-align:center; position:relative; }
+  .auth-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:40px; width:360px; text-align:center; position:relative; z-index:2; }
   .auth-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),transparent); border-radius:16px 16px 0 0; }
   .auth-close { position:absolute; top:14px; right:14px; width:26px; height:26px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--muted); font-size:14px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
   .auth-close:hover { background:var(--off-dim); border-color:var(--off); color:var(--off); }
@@ -753,10 +890,10 @@ HTML = r"""<!DOCTYPE html>
   .dismiss-btn { padding:10px 18px; background:transparent; border:1px solid var(--border2); border-radius:8px; color:var(--muted); font-family:var(--mono); font-size:12px; cursor:pointer; transition:all 0.2s; }
   .dismiss-btn:hover { color:var(--text); border-color:var(--text); }
 
-  #app { display:flex; flex-direction:column; height:100vh; opacity:0; transition:opacity 0.4s ease; }
+  #app { display:flex; flex-direction:column; height:100vh; opacity:0; transition:opacity 0.4s ease; position:relative; z-index:1; }
   #app.visible { opacity:1; }
 
-  .titlebar { height:50px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 18px 0 16px; -webkit-app-region:drag; flex-shrink:0; }
+  .titlebar { height:50px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 18px 0 16px; -webkit-app-region:drag; flex-shrink:0; position:relative; z-index:2; }
   .titlebar-left { display:flex; align-items:center; gap:10px; -webkit-app-region:no-drag; }
   .titlebar-left img { width:26px; height:26px; object-fit:contain; }
   .titlebar-word { font-family:var(--display); font-size:17px; font-weight:800; color:var(--text); letter-spacing:-0.3px; }
@@ -768,7 +905,7 @@ HTML = r"""<!DOCTYPE html>
   .dot.off { background:var(--off); }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
   .plan-pill { padding:4px 10px; border-radius:100px; font-size:10px; font-weight:600; letter-spacing:0.06em; font-family:var(--mono); }
-  .plan-pill.premium { background:var(--accent-d); border:1px solid rgba(61,158,255,0.35); color:var(--accent); }
+  .plan-pill.premium { background:linear-gradient(135deg, rgba(255,215,0,0.15), rgba(255,215,0,0.05)); border:1px solid rgba(255,215,0,0.4); color:var(--premium); text-shadow: 0 0 8px rgba(255,215,0,0.3); }
   .plan-pill.home { background:var(--on-dim); border:1px solid rgba(0,229,160,0.25); color:var(--on); }
   .plan-pill.none { background:var(--raised); border:1px solid var(--border); color:var(--muted); }
   .user-pill { display:flex; align-items:center; gap:8px; padding:4px 10px; background:var(--raised); border:1px solid var(--border); border-radius:100px; font-size:11px; color:var(--muted); }
@@ -778,8 +915,8 @@ HTML = r"""<!DOCTYPE html>
   .close-btn { width:26px; height:26px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--muted); font-size:14px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
   .close-btn:hover { background:var(--off-dim); border-color:var(--off); color:var(--off); }
 
-  .body { flex:1; display:flex; overflow:hidden; }
-  .sidebar { width:190px; background:var(--surface); border-right:1px solid var(--border); padding:20px 0; flex-shrink:0; display:flex; flex-direction:column; gap:2px; }
+  .body { flex:1; display:flex; overflow:hidden; position:relative; z-index:1; }
+  .sidebar { width:190px; background:var(--surface); border-right:1px solid var(--border); padding:20px 0; flex-shrink:0; display:flex; flex-direction:column; gap:2px; position:relative; z-index:2; }
   .nav-item { display:flex; align-items:center; gap:10px; padding:10px 18px; font-size:12px; color:var(--muted); cursor:pointer; border-left:2px solid transparent; transition:all 0.15s; letter-spacing:0.04em; position:relative; }
   .nav-item:hover { color:var(--text); background:var(--raised); }
   .nav-item.active { color:var(--accent); border-left-color:var(--accent); background:var(--accent-d); }
@@ -793,7 +930,7 @@ HTML = r"""<!DOCTYPE html>
   .sub-expiry.exp { color:var(--off); }
   .sub-expiry.none { color:var(--muted); }
 
-  .content { flex:1; overflow-y:auto; padding:32px 36px; }
+  .content { flex:1; overflow-y:auto; padding:32px 36px; position:relative; z-index:2; }
   .content::-webkit-scrollbar { width:4px; }
   .content::-webkit-scrollbar-track { background:transparent; }
   .content::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
@@ -805,8 +942,18 @@ HTML = r"""<!DOCTYPE html>
   .disabler-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px 28px; margin-bottom:18px; position:relative; overflow:hidden; grid-column:1/-1; }
   .disabler-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),transparent); }
   .disabler-card.active::before { background:linear-gradient(90deg,var(--on),transparent); }
-  .disabler-card.active { border-color:rgba(0,229,160,0.2); }
   .disabler-card.locked { opacity:0.5; }
+  
+  /* Premium card styling */
+  body.premium-active .disabler-card,
+  body.premium-active .toggle-card,
+  body.premium-active .stat-card,
+  body.premium-active .updates-card,
+  body.premium-active .about-card {
+    border-color: rgba(255,215,0,0.2);
+    box-shadow: 0 0 20px rgba(255,215,0,0.05);
+  }
+  
   .disabler-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
   .disabler-title { font-family:var(--display); font-size:15px; font-weight:700; color:var(--text); }
   .disabler-badge { display:inline-flex; align-items:center; gap:5px; padding:2px 10px; border-radius:100px; font-size:8px; font-weight:500; }
@@ -827,13 +974,12 @@ HTML = r"""<!DOCTYPE html>
   .dis-track { height:2px; background:var(--border); border-radius:2px; overflow:hidden; }
   .dis-fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--on)); border-radius:2px; width:0%; transition:width 0.35s cubic-bezier(0.4,0,0.2,1); }
   .dis-error { font-size:11px; color:var(--off); margin-top:8px; display:none; }
-  .no-plan-overlay { position:absolute; inset:0; background:rgba(7,10,15,0.6); display:flex; align-items:center; justify-content:center; z-index:10; border-radius:14px; }
+  .no-plan-overlay { position:absolute; inset:0; background:rgba(7,10,15,0.85); display:flex; align-items:center; justify-content:center; z-index:10; border-radius:14px; backdrop-filter:blur(2px); }
   .no-plan-overlay span { font-size:12px; color:var(--muted); letter-spacing:0.06em; font-family:var(--mono); }
 
   .toggle-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px 24px 22px; position:relative; overflow:hidden; transition:border-color 0.3s; }
   .toggle-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),transparent); transition:background 0.4s; }
   .toggle-card.on::before { background:linear-gradient(90deg,var(--on),transparent); }
-  .toggle-card.on { border-color:rgba(0,229,160,0.2); }
   .toggle-card.locked { opacity:0.5; }
   .status-label { font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:10px; }
   .status-value { font-family:var(--display); font-size:22px; font-weight:800; line-height:1; margin-bottom:4px; transition:color 0.3s; }
@@ -904,7 +1050,7 @@ HTML = r"""<!DOCTYPE html>
   .toast-icon.info { color:var(--accent); font-size:14px; flex-shrink:0; }
 </style>
 </head>
-<body>
+<body id="body">
 
 <div id="auth-screen">
   <div class="auth-card">
@@ -1124,20 +1270,22 @@ HTML = r"""<!DOCTYPE html>
     const serverLabel = document.getElementById('server-label');
     const disActBtn = document.getElementById('dis-activate-btn');
     const tglBtn = document.getElementById('toggle-btn');
+    const body = document.getElementById('body');
     
     pill.className = 'plan-pill ' + (plan === 'premium' ? 'premium' : plan === 'home' ? 'home' : 'none');
     
     if (plan === 'premium') {
       pill.textContent = 'PREMIUM';
-      if (titleWord) titleWord.innerHTML = 'Unblock<span class="r">R</span> Premium';
-      if (aboutPlan) aboutPlan.textContent = 'Premium — Works Anywhere';
+      if (titleWord) titleWord.innerHTML = 'Unblock<span class="r">R</span> <span style="color:#ffd700;font-size:12px;">PREMIUM</span>';
+      if (aboutPlan) aboutPlan.innerHTML = '<span style="color:#ffd700;">PREMIUM</span> — Works Anywhere';
       if (noPlanOverlay) noPlanOverlay.style.display = 'none';
       if (disCard) disCard.classList.remove('locked');
       if (toggleCard) toggleCard.classList.remove('locked');
-      if (infoAddr) infoAddr.textContent = 'Premium (automatic)';
-      if (serverLabel) serverLabel.textContent = 'Premium Network';
+      if (infoAddr) infoAddr.innerHTML = '<span style="color:#ffd700;">Premium Tunnel</span>';
+      if (serverLabel) serverLabel.innerHTML = '<span style="color:#ffd700;">Premium Network</span>';
       if (disActBtn) disActBtn.disabled = false;
       if (tglBtn) tglBtn.disabled = false;
+      body.classList.add('premium-active');
     } else if (plan === 'home') {
       pill.textContent = 'HOME';
       if (titleWord) titleWord.innerHTML = 'Unblock<span class="r">R</span> HOME';
@@ -1149,6 +1297,7 @@ HTML = r"""<!DOCTYPE html>
       if (serverLabel) serverLabel.textContent = 'HOME Network';
       if (disActBtn) disActBtn.disabled = false;
       if (tglBtn) tglBtn.disabled = false;
+      body.classList.remove('premium-active');
     } else {
       pill.textContent = 'No Plan';
       if (titleWord) titleWord.innerHTML = 'Unblock<span class="r">R</span>';
@@ -1160,6 +1309,7 @@ HTML = r"""<!DOCTYPE html>
       if (serverLabel) serverLabel.textContent = 'UnblockR Status';
       if (disActBtn) disActBtn.disabled = true;
       if (tglBtn) tglBtn.disabled = true;
+      body.classList.remove('premium-active');
     }
   }
 
@@ -1190,7 +1340,7 @@ HTML = r"""<!DOCTYPE html>
         document.getElementById('auth-screen').classList.remove('visible');
         document.getElementById('app').classList.add('visible');
       } else {
-        const msgs = {
+        const msgs = {s
           invalid_credentials: 'Incorrect username or password.',
           username_taken: 'Username already taken.',
           no_subscription: 'Account created — contact admin.',
@@ -1322,7 +1472,7 @@ HTML = r"""<!DOCTYPE html>
     applyPlanUI(plan);
   };
 
-  async function boot() {
+async function boot() {
     setProgress(30, 'Loading...');
     await sleep(200);
     setProgress(70, 'Checking subscription...');
@@ -1339,6 +1489,10 @@ HTML = r"""<!DOCTYPE html>
     document.getElementById('about-ver').textContent = appVersion;
     document.getElementById('upd-local').textContent = appVersion;
 
+    if (result.logged_in) {
+      applyUserState(result.username, result.sub_expires);
+    }
+    
     applyPlanUI(userPlan);
     
     if (result.disabler_active && !userPlan) {
@@ -1353,7 +1507,6 @@ HTML = r"""<!DOCTYPE html>
     applyDisablerState(result.disabler_active === true && userPlan !== null);
 
     if (result.logged_in) {
-      applyUserState(result.username, result.sub_expires);
       showApp();
     } else {
       showAuthScreen();
@@ -1630,11 +1783,10 @@ async function doUninstall() {
 </script>
 </body>
 </html>"""
-
 # ── Entry point ────────────────────────────────────────────────────────────────
 settings = load_settings()
-api      = API()
-icon     = str(ICON_PATH) if ICON_PATH.exists() else None
+api = API()
+icon = str(ICON_PATH) if ICON_PATH.exists() else None
 
 window = webview.create_window(
     "UnblockR",
