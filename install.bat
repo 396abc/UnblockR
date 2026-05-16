@@ -126,29 +126,9 @@ call :run 8 "Installing Python via winget" "winget install -e --id Python.Python
 set "PATH=%PATH%;C:\Program Files\Python313\Scripts;C:\Program Files\Python313;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313"
 
 python --version >nul 2>nul
-if !errorlevel! equ 0 (
-    for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
-    call :t 15 "!pv! installed"
-    goto pk
-)
-
-::fallback download
-
-call :run 10 "Downloading Python installer" "curl -L -o ""%TEMP%\py_setup.exe"" ""%rb%/Python%%203.13%%20Installer.exe"" -H ""User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"" --retry 3 --retry-delay 5 -# 2>nul"
-
-if exist "%TEMP%\py_setup.exe" (
-    call :run 13 "Running Python installer" "start /wait """" ""%TEMP%\py_setup.exe"" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0 2>nul"
-    del "%TEMP%\py_setup.exe" >nul 2>nul
-) else (
-    call :f "Python download failed. Check your connection."
-)
-
-set "PATH=%PATH%;C:\Program Files\Python313\Scripts;C:\Program Files\Python313;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313"
-python --version >nul 2>nul
 if !errorlevel! neq 0 call :f "Python not detected after install. Reboot and try again."
 for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
-call :t 15 "!pv! ready"
-
+call :t 15 "!pv! installed"
 ::packages
 
 :pk
