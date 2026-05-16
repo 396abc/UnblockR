@@ -5,6 +5,9 @@ setlocal enabledelayedexpansion
 
 :: setup
 set rb=https://github.com/396abc/UnblockR/raw/refs/heads/main
+set ro=396abc
+set rn=UnblockR
+set rr=main
 set id=%LOCALAPPDATA%\UnblockR
 set sm=%APPDATA%\Microsoft\Windows\Start Menu\Programs
 for /f "delims=" %%a in ('forfiles /p "%~dp0." /m "%~nx0" /c "cmd /c echo 0x1B"') do set "e=%%a"
@@ -37,7 +40,7 @@ set "br="
 set "i=0"
 :bl1
 if !i! lss %d% (
-    set "br=!br!#"
+    set "br=!br!="
     set /a "i+=1"
     goto bl1
 )
@@ -130,6 +133,7 @@ if not defined pypath call :f "Python not detected after install. Reboot and try
 set "PATH=!pypath!;!pypath!\Scripts;%PATH%"
 for /f "tokens=*" %%i in ('"!pypath!\python.exe" --version 2^>^&1') do set pv=%%i
 call :t 15 "!pv! installed"
+
 ::packages
 
 :pk
@@ -145,35 +149,15 @@ call :run 38 "Installing websocket-client" "python -c ""import websocket"" 2>nul
 
 :dl
 if not exist "%id%" mkdir "%id%" >nul 2>nul
-set df=0
 
-call :run 45 "Downloading application core" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')"" >nul 2>nul"
-if not exist "%id%\main.py" set df=1
+call :run 45 "Downloading application files" "powershell -NoProfile -ExecutionPolicy Bypass -Command ""$ErrorActionPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $t=([int](Get-Date -UFormat '%%s')); $tree=(Invoke-RestMethod -Uri 'https://api.github.com/repos/%ro%/%rn%/git/trees/%rr%?recursive=1&t='+$t -Headers @{'User-Agent'='UnblockR-Installer';'Cache-Control'='no-cache'}); $exc=(Invoke-WebRequest -Uri '%rb%/upd.exclusions?t='+$t -Headers @{'Cache-Control'='no-cache'} -UseBasicParsing).Content -split '`n' | ForEach-Object {$_.Trim()} | Where-Object {$_ -and -not $_.StartsWith('#')}; $files=$tree.tree | Where-Object {$_.type -eq 'blob'} | ForEach-Object {$_.path}; foreach($f in $files){$skip=$false; $parts=$f -split '/'; foreach($e in $exc){if($f -eq $e -or $parts[-1] -eq $e -or ($parts.Count -gt 1 -and $parts[0..($parts.Count-2)] -contains $e)){$skip=$true; break}}; if(-not $skip){$dest='%id%\'+$f.Replace('/','\'); $dir=[IO.Path]::GetDirectoryName($dest); if(-not (Test-Path $dir)){New-Item -ItemType Directory -Path $dir -Force | Out-Null}; $url='https://raw.githubusercontent.com/%ro%/%rn%/%rr%/'+$f+'?t='+$t; try{(New-Object Net.WebClient).DownloadFile($url,$dest)}catch{}}}"" >nul 2>nul"
 
-call :run 52 "Downloading updater" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')"" >nul 2>nul"
-
-call :run 58 "Downloading application assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')"" >nul 2>nul"
-if not exist "%id%\launcher.vbs" (
-    echo Dim sDir > "%id%\launcher.vbs"
-    echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\launcher.vbs"
-    echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\main.py" ^& Chr^(34^), 0, False >> "%id%\launcher.vbs"
-)
-
-call :run 65 "Downloading application assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')"" >nul 2>nul"
-if not exist "%id%\updater_launcher.vbs" (
-    echo Dim sDir > "%id%\updater_launcher.vbs"
-    echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\updater_launcher.vbs"
-    echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\updater.py" ^& Chr^(34^), 0, False >> "%id%\updater_launcher.vbs"
-)
-
-call :run 75 "Downloading application assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')"" >nul 2>nul"
+if not exist "%id%\main.py" call :f "Download failed. Check your internet connection."
 
 call :t 80 "Writing config"
 if not exist "%id%\settings.json" (
     echo {"window":{"x":120,"y":120,"w":940,"h":620},"disabler_active":false} > "%id%\settings.json"
 )
-
-if %df% equ 1 call :f "Download failed. Check your internet connection."
 
 ::shortcuts
 
