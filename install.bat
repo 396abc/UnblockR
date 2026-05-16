@@ -9,13 +9,39 @@ set id=%LOCALAPPDATA%\UnblockR
 set sm=%APPDATA%\Microsoft\Windows\Start Menu\Programs
 for /f "delims=" %%a in ('forfiles /p "%~dp0." /m "%~nx0" /c "cmd /c echo 0x1B"') do set "e=%%a"
 
-:: Check if we're already running to prevent re-launch
-set "installer_flag=%TEMP%\ubr_installer_running.flag"
-if exist "%installer_flag%" (
-    echo Installer is already running. Exiting duplicate instance...
-    timeout /t 2 /nobreak >nul
-    exit /b 0
+:: Use a unique flag based on process ID to avoid conflicts
+set "installer_flag=%TEMP%\ubr_installer_running_%RANDOM%.flag"
+set "global_flag=%TEMP%\ubr_installer_global.flag"
+
+:: Check if another instance is running
+:check_instance
+set "other_instance=0"
+for /f "tokens=2" %%a in ('tasklist /fi "imagename eq cmd.exe" /fo csv /nh 2^>nul') do (
+    set "cmdline=%%a"
+    if "!cmdline!" neq "" (
+        echo !cmdline! | find /i "UnblockR" >nul
+        if !errorlevel! equ 0 (
+            set "other_instance=1"
+        )
+    )
 )
+
+if exist "%global_flag%" (
+    type "%global_flag%" 2>nul | findstr /i "UnblockR" >nul
+    if !errorlevel! equ 0 (
+        echo Another installer instance may be running.
+        echo If you're sure no other instance is running, please wait 5 seconds or delete %global_flag%
+        timeout /t 5 /nobreak >nul
+        if exist "%global_flag%" (
+            echo Still seeing flag file. Exiting.
+            timeout /t 2 /nobreak >nul
+            exit /b 0
+        )
+    )
+)
+
+:: Create global flag
+echo UnblockR Installer - %DATE% %TIME% - PID: !random! > "%global_flag%"
 echo %DATE% %TIME% > "%installer_flag%"
 
 goto m
@@ -116,8 +142,7 @@ echo  !e![91m[FAIL] %~1!e![0m
 echo.
 echo  !e![91mPress any key to exit...!e![0m
 pause >nul
-del "%installer_flag%" >nul 2>nul
-exit /b 1
+goto :cleanup
 
 ::manual python install with new window
 
@@ -223,8 +248,6 @@ if !errorlevel! equ 0 (
 
 :: If Python not found, open new window for manual installation
 call :install_python
-:: After install_python completes, it should go to pk, but ensure we don't fall through
-if !errorlevel! neq 0 goto :eof
 
 ::packages
 
@@ -296,6 +319,7 @@ start "" wscript.exe "%id%\launcher.vbs"
 :: Cleanup and exit
 :cleanup
 del "%installer_flag%" >nul 2>nul
+del "%global_flag%" >nul 2>nul
 if exist "%TEMP%\install_python.bat" del "%TEMP%\install_python.bat" >nul 2>nul
 timeout /t 4 /nobreak >nul
 exit /b 0
