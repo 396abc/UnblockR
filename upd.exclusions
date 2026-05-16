@@ -1,2 +1,6 @@
 resources
 Cmd
+network_analyser.bat
+install.bat
+client.py
+README.md
