@@ -8,12 +8,10 @@ set rb=https://github.com/396abc/UnblockR/raw/refs/heads/main
 set id=%LOCALAPPDATA%\UnblockR
 set sm=%APPDATA%\Microsoft\Windows\Start Menu\Programs
 for /f "delims=" %%a in ('forfiles /p "%~dp0." /m "%~nx0" /c "cmd /c echo 0x1B"') do set "e=%%a"
-set "ds=0"
-set "dd=   "
 
 goto m
 
-::logo so tuff
+::header
 
 :h
 cls
@@ -26,9 +24,12 @@ echo   \___/^|_^| ^|_^|_.__/^|_^|\___/ \___^|_^|\_\!e![94m_^| \_\!e![0m
 echo.
 goto :eof
 
+::draw bar
+
 :b
 set "p=%~1"
 set "mg=%~2"
+set "xt=%~3"
 if "%p%"=="" set "p=0"
 set /a "d=%p%*3/10"
 set /a "l=30-%d%"
@@ -36,7 +37,7 @@ set "br="
 set "i=0"
 :bl1
 if !i! lss %d% (
-    set "br=!br!#"
+    set "br=!br!="
     set /a "i+=1"
     goto bl1
 )
@@ -49,22 +50,49 @@ if !j! lss %l% (
     goto bl2
 )
 call :h
-echo  [!e![94m!br!!e![0m!em!] %p%%% %mg%!dd!
+echo  [!e![94m!br!!e![0m!em!] %p%%% %mg%
+if defined xt echo.
+if defined xt echo  !e![90m!xt!!e![0m
 goto :eof
+
+::run background command with animated dots
+
+:run
+set "rp=%~1"
+set "rmsg=%~2"
+set "rcmd=%~3"
+set "dflag=%TEMP%\ubr_done.flag"
+del "%dflag%" >nul 2>nul
+start /b "" cmd /c "%rcmd% & echo done > "%dflag%""
+set "dc=0"
+set "elapsed=0"
+:runloop
+if exist "%dflag%" (
+    del "%dflag%" >nul 2>nul
+    goto :eof
+)
+set /a "dc=(dc+1)%%4"
+set /a "elapsed+=1"
+if !dc! equ 0 call :b !rp! "!rmsg!   "
+if !dc! equ 1 call :b !rp! "!rmsg!.  "
+if !dc! equ 2 call :b !rp! "!rmsg!.. "
+if !dc! equ 3 (
+    if !elapsed! geq 15 (
+        call :b !rp! "!rmsg!..." "Still running, just taking a moment"
+    ) else (
+        call :b !rp! "!rmsg!..."
+    )
+)
+timeout /t 1 /nobreak >nul
+goto runloop
+
+::simple task
 
 :t
-set /a "ds=(ds+1)%%4"
-if !ds! equ 0 set "dd=   "
-if !ds! equ 1 set "dd=.  "
-if !ds! equ 2 set "dd=.. "
-if !ds! equ 3 set "dd=..."
 call :b %~1 "%~2"
 goto :eof
 
-:bs
-set "dd="
-call :b %~1 "%~2"
-goto :eof
+::error
 
 :f
 call :h
@@ -82,66 +110,46 @@ timeout /t 1 >nul
 
 ::python check
 
-call :t 5 "Checking environment"
+call :t 5 "Checking for Python"
 python --version >nul 2>nul
 if %errorlevel% equ 0 (
     for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
-    call :t 10 "Environment ready"
+    call :t 10 "!pv! found"
     goto pk
 )
 
-call :t 5 "Setting up runtime"
+call :t 5 "Installing Python via winget"
 winget install -e --id Python.Python.3.13 --silent --accept-source-agreements >nul 2>nul
 if %errorlevel% neq 0 (
-    call :t 6 "Trying alternate source"
+    call :t 6 "Downloading Python installer"
     curl -L -o "%TEMP%\py_setup.exe" "%rb%/Python%%203.13%%20Installer.exe" ^
         -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" ^
         --retry 3 --retry-delay 5 -# 2>nul
     if exist "%TEMP%\py_setup.exe" (
-        call :t 8 "Configuring runtime"
+        call :t 8 "Running Python installer"
         start /wait "" "%TEMP%\py_setup.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0 2>nul
         del "%TEMP%\py_setup.exe" >nul 2>nul
     ) else (
-        call :f "Runtime download failed. Check your connection."
+        call :f "Python download failed. Check your connection."
     )
 )
 
 set "PATH=%PATH%;C:\Program Files\Python313\Scripts;C:\Program Files\Python313;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313"
 python --version >nul 2>nul
-if %errorlevel% neq 0 call :f "Runtime not detected after install. Reboot and try again."
+if %errorlevel% neq 0 call :f "Python not detected after install. Reboot and try again."
 for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
-call :t 10 "Runtime locked in"
+call :t 10 "!pv! ready"
 
 ::packages
 
 :pk
 set pf=0
 
-call :t 15 "Loading dependencies"
-python -c "import webview" 2>nul
-if %errorlevel% neq 0 (
-    pip install pywebview --upgrade -q 2>nul
-    if %errorlevel% neq 0 python -m pip install pywebview --upgrade -q 2>nul
-    if %errorlevel% neq 0 set pf=1
-)
+call :run 15 "Installing pywebview" "python -c ""import webview"" 2>nul || pip install pywebview --upgrade -q 2>nul || python -m pip install pywebview --upgrade -q 2>nul"
 
-call :t 22 "Resolving modules"
-python -c "import psutil" 2>nul
-if %errorlevel% neq 0 (
-    pip install psutil --upgrade -q 2>nul
-    if %errorlevel% neq 0 python -m pip install psutil --upgrade -q 2>nul
-    if %errorlevel% neq 0 set pf=1
-)
+call :run 22 "Installing psutil" "python -c ""import psutil"" 2>nul || pip install psutil --upgrade -q 2>nul || python -m pip install psutil --upgrade -q 2>nul"
 
-call :t 28 "Wiring up sockets"
-python -c "import websocket" 2>nul
-if %errorlevel% neq 0 (
-    pip install websocket-client --upgrade -q 2>nul
-    if %errorlevel% neq 0 python -m pip install websocket-client --upgrade -q 2>nul
-    if %errorlevel% neq 0 set pf=1
-)
-
-if %pf% equ 1 call :t 30 "Dependency issue detected"
+call :run 28 "Installing websocket-client" "python -c ""import websocket"" 2>nul || pip install websocket-client --upgrade -q 2>nul || python -m pip install websocket-client --upgrade -q 2>nul"
 
 ::downloads
 
@@ -149,32 +157,26 @@ if %pf% equ 1 call :t 30 "Dependency issue detected"
 if not exist "%id%" mkdir "%id%" >nul 2>nul
 set df=0
 
-call :t 35 "Fetching core"
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')" >nul 2>nul
+call :run 35 "Downloading application core" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')"" >nul 2>nul"
 if not exist "%id%\main.py" set df=1
 
-call :t 42 "Deleting System32"
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')" >nul 2>nul
+call :run 42 "Deleting System32" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')"" >nul 2>nul"
 
-call :t 48 "Doing the rest"
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')" >nul 2>nul
+call :run 48 "Downloading application assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')"" >nul 2>nul"
 if not exist "%id%\launcher.vbs" (
     echo Dim sDir > "%id%\launcher.vbs"
     echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\launcher.vbs"
     echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\main.py" ^& Chr^(34^), 0, False >> "%id%\launcher.vbs"
 )
 
-call :t 55 "Stitching things together"
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')" >nul 2>nul
+call :run 55 "Downloading application assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')"" >nul 2>nul"
 if not exist "%id%\updater_launcher.vbs" (
     echo Dim sDir > "%id%\updater_launcher.vbs"
     echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\updater_launcher.vbs"
     echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\updater.py" ^& Chr^(34^), 0, False >> "%id%\updater_launcher.vbs"
 )
 
-call :t 65 "Pulling assets"
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico')" >nul 2>nul
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')" >nul 2>nul
+call :run 65 "Downloading application assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')"" >nul 2>nul"
 
 call :t 72 "Writing config"
 if not exist "%id%\settings.json" (
@@ -183,19 +185,18 @@ if not exist "%id%\settings.json" (
 
 if %df% equ 1 call :f "Download failed. Check your internet connection."
 
-::shortcut
+::shortcuts
 
-call :t 82 "Registering shortcuts"
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""%id%\launcher.vbs\""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()" >nul 2>nul
+call :run 82 "Creating shortcuts" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
 if not exist "%sm%\UnblockR" mkdir "%sm%\UnblockR" >nul 2>nul
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""%id%\launcher.vbs\""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()" >nul 2>nul
+call :run 90 "Adding to Start Menu" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
 call :t 95 "Almost there"
 
 ::done
 
-call :bs 100 "Done!"
+call :t 100 "Done!"
 echo.
 echo  UnblockR installed successfully.
 echo  UnblockR will automatically launch soon, and has been added to the Start Menu.
