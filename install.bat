@@ -149,31 +149,39 @@ call :run 38 "Installing websocket-client" "python -c ""import websocket"" 2>nul
 
 :dl
 if not exist "%id%" mkdir "%id%" >nul 2>nul
-set df=0
 
-call :run 45 "Downloading application files" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')"" >nul 2>nul"
-if not exist "%id%\main.py" set df=1
+call :t 42 "Preparing download"
 
-call :run 50 "Downloading application files" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')"" >nul 2>nul"
+echo aW1wb3J0IHVybGxpYi5yZXF1ZXN0LGpzb24sdGltZSxvcyxzeXMKdD1zdHIoaW50KHRpbWUudGltZSgpKSkKb3duZXI9c3lzLmFyZ3ZbMV0KcmVwbz1zeXMuYXJndlsyXQpicmFuY2g9c3lzLmFyZ3ZbM10KcmVxPXVybGxpYi5yZXF1ZXN0LlJlcXVlc3QoCiAgICBmImh0dHBzOi8vYXBpLmdpdGh1Yi5jb20vcmVwb3Mve293bmVyfS97cmVwb30vZ2l0L3RyZWVzL3ticmFuY2h9P3JlY3Vyc2l2ZT0xJnQ9e3R9IiwKICAgIGhlYWRlcnM9eyJVc2VyLUFnZW50IjoiVUJSIn0KKQp0cmVlPWpzb24ubG9hZHModXJsbGliLnJlcXVlc3QudXJsb3BlbihyZXEsdGltZW91dD0zMCkucmVhZCgpKQpleGNfdXJsPWYiaHR0cHM6Ly9naXRodWIuY29tL3tvd25lcn0ve3JlcG99L3Jhdy9yZWZzL2hlYWRzL3ticmFuY2h9L3VwZC5leGNsdXNpb25zP3Q9e3R9IgpleGM9e2wuc3RyaXAoKSBmb3IgbCBpbiB1cmxsaWIucmVxdWVzdC51cmxvcGVuKGV4Y191cmwsdGltZW91dD0xNSkucmVhZCgpLmRlY29kZSgpLnNwbGl0bGluZXMoKSBpZiBsLnN0cmlwKCkgYW5kIG5vdCBsLnN0cmlwKCkuc3RhcnRzd2l0aCgiIyIpfQpvdXQ9b3Blbihvcy5wYXRoLmpvaW4ob3MuZW52aXJvblsiVEVNUCJdLCJ1YnJfZmlsZXMudHh0IiksInciKQpmb3IgaSBpbiB0cmVlWyJ0cmVlIl06CiAgICBpZiBpWyJ0eXBlIl0hPSJibG9iIjoKICAgICAgICBjb250aW51ZQogICAgcD1pWyJwYXRoIl07cGFydHM9cC5zcGxpdCgiLyIpO3NraXA9RmFsc2UKICAgIGZvciBlIGluIGV4YzoKICAgICAgICBpZiBwPT1lIG9yIHBhcnRzWy0xXT09ZSBvciBlIGluIHBhcnRzWzotMV06c2tpcD1UcnVlO2JyZWFrCiAgICBpZiBub3Qgc2tpcDpvdXQud3JpdGUocCsiXG4iKQpvdXQuY2xvc2UoKQo= > "%TEMP%\ubr_fetch.b64"
+certutil -decode "%TEMP%\ubr_fetch.b64" "%TEMP%\ubr_fetch.py" >nul 2>nul
 
-call :run 55 "Downloading application files" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')"" >nul 2>nul"
-if not exist "%id%\launcher.vbs" (
-    echo Dim sDir > "%id%\launcher.vbs"
-    echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\launcher.vbs"
-    echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\main.py" ^& Chr^(34^), 0, False >> "%id%\launcher.vbs"
+echo aW1wb3J0IHVybGxpYi5yZXF1ZXN0LHRpbWUsc3lzLG9zCnQ9c3RyKGludCh0aW1lLnRpbWUoKSkpCnVybD1zeXMuYXJndlsxXSsiP3Q9Iit0CmRlc3Q9c3lzLmFyZ3ZbMl0Kb3MubWFrZWRpcnMob3MucGF0aC5kaXJuYW1lKG9zLnBhdGguYWJzcGF0aChkZXN0KSksZXhpc3Rfb2s9VHJ1ZSkKdXJsbGliLnJlcXVlc3QudXJscmV0cmlldmUodXJsLGRlc3QpCg== > "%TEMP%\ubr_dl.b64"
+certutil -decode "%TEMP%\ubr_dl.b64" "%TEMP%\ubr_dl.py" >nul 2>nul
+
+call :run 44 "Fetching file list" "python ""%TEMP%\ubr_fetch.py"" %ro% %rn% %rr%"
+
+if not exist "%TEMP%\ubr_files.txt" call :f "Failed to fetch file list. Check your internet connection."
+
+set "fc=0"
+for /f "usebackq delims=" %%a in ("%TEMP%\ubr_files.txt") do set /a "fc+=1"
+if !fc! equ 0 call :f "No files to download. Check your internet connection."
+
+set "fi=0"
+for /f "usebackq delims=" %%a in ("%TEMP%\ubr_files.txt") do (
+    set /a "fi+=1"
+    set /a "pct=45+fi*35/fc"
+    set "fp=%%a"
+    set "fp=!fp:/=\!"
+    call :run !pct! "Downloading application files" "python ""%TEMP%\ubr_dl.py"" ""https://raw.githubusercontent.com/%ro%/%rn%/%rr%/%%a"" ""%id%\!fp!"""
 )
 
-call :run 60 "Downloading application files" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')"" >nul 2>nul"
-if not exist "%id%\updater_launcher.vbs" (
-    echo Dim sDir > "%id%\updater_launcher.vbs"
-    echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\updater_launcher.vbs"
-    echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\updater.py" ^& Chr^(34^), 0, False >> "%id%\updater_launcher.vbs"
-)
+del "%TEMP%\ubr_files.txt" >nul 2>nul
+del "%TEMP%\ubr_fetch.py" >nul 2>nul
+del "%TEMP%\ubr_fetch.b64" >nul 2>nul
+del "%TEMP%\ubr_dl.py" >nul 2>nul
+del "%TEMP%\ubr_dl.b64" >nul 2>nul
 
-call :run 70 "Downloading application files" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/%ro%/%rn%/%rr%/UnblockR.png', '%id%\UnblockR.png')"" >nul 2>nul"
-
-if %df% equ 1 call :f "Download failed. Check your internet connection."
-
+if not exist "%id%\main.py" call :f "Download failed. Check your internet connection."
 ::shortcuts
 
 call :run 85 "Creating shortcuts" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
