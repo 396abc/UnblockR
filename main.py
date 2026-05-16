@@ -227,7 +227,7 @@ def verify_token_sync(token: str) -> tuple:
         if plan == "home":
             PROXY_IP   = proxy_cfg.get("host", "static.unblockr.org")
             PROXY_PORT = proxy_cfg.get("port", 8888)
-            PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+            PROXY_ADDR = f"{USER_TOKEN}:x@{PROXY_IP}:{PROXY_PORT}" if USER_TOKEN else None
             TUNNEL_URL = None
             LOCAL_PROXY = None
         elif plan == "premium":
@@ -480,7 +480,7 @@ def _set_home_proxy():
     global PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY
     PROXY_IP = "static.unblockr.org"
     PROXY_PORT = 8888
-    PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+    PROXY_ADDR = f"{USER_TOKEN}:x@{PROXY_IP}:{PROXY_PORT}" if USER_TOKEN else None
     TUNNEL_URL = None
     LOCAL_PROXY = None
     log.info(f"Home proxy configured: {PROXY_ADDR}")
@@ -591,7 +591,7 @@ class API:
         if plan == "home":
             PROXY_IP = "static.unblockr.org"
             PROXY_PORT = 8888
-            PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+            PROXY_ADDR = f"{USER_TOKEN}:x@{PROXY_IP}:{PROXY_PORT}" if USER_TOKEN else None
             TUNNEL_URL = None
             LOCAL_PROXY = None
             log.info(f"Home proxy configured: {PROXY_ADDR}")
@@ -630,7 +630,7 @@ class API:
         if plan == "home":
             PROXY_IP = "static.unblockr.org"
             PROXY_PORT = 8888
-            PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+            PROXY_ADDR = f"{USER_TOKEN}:x@{PROXY_IP}:{PROXY_PORT}" if USER_TOKEN else None
             TUNNEL_URL = None
             LOCAL_PROXY = None
         elif plan == "premium":
