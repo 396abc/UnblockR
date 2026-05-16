@@ -1,670 +1,3 @@
-#!/usr/bin/env python3
-"""
-UnblockR - main.py
-GUI client for UnblockR.
-Runs via launcher.vbs (hidden console).
-"""
-
-VERSION = "1.3.0"
-
-import sys
-import os
-import json
-import winreg
-import ctypes
-import subprocess
-import urllib.request
-import urllib.error
-import threading
-import socket
-import websocket
-import time
-import shutil
-import zipfile
-import logging
-from pathlib import Path
-import base64
-import re
-import random
-
-try:
-    import webview
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pywebview", "-q"])
-    import webview
-
-# ── Config ─────────────────────────────────────────────────────────────────────
-APP_DIR     = Path(os.path.dirname(os.path.abspath(__file__)))
-SETTINGS_FILE = APP_DIR / "settings.json"
-
-# These are set dynamically based on plan
-PROXY_IP    = None
-PROXY_PORT  = None
-PROXY_ADDR  = None
-TUNNEL_URL  = None
-LOCAL_PROXY = None
-USER_PLAN   = None
-USER_TOKEN  = None
-
-AUTH_URL     = "https://auth.unblockr.org"
-DASH_URL     = "https://dash.unblockr.org/api/stats"
-REMOTE_MAIN  = "https://raw.githubusercontent.com/396abc/UnblockR/main/main.py"
-
-ICON_URL    = "https://github.com/396abc/UnblockR/raw/refs/heads/main/UnblockR.ico"
-LOGO_URL    = "https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png"
-
-REG_PATH     = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-PROXY_BYPASS = "localhost;127.*;192.168.*;<local>"
-
-CHROME_DIR    = Path(os.environ.get("LOCALAPPDATA","")) / "Google/Chrome/User Data/Default"
-BACKUP_DIR    = APP_DIR / "backups"
-RESOURCES_DIR = APP_DIR / "resources"
-
-# ── Logging ────────────────────────────────────────────────────────────────────
-LOG_PATH = APP_DIR / "unblockr.log"
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_PATH, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ]
-)
-log = logging.getLogger("UnblockR")
-
-ICON_PATH   = APP_DIR / "UnblockR.ico"
-LOGO_PATH   = APP_DIR / "UnblockR.png"
-
-EXTENSION_FOLDERS = [
-    "Extension Scripts", "Extensions", "Managed Extension Settings",
-    "Local Extension Settings", "Extension State", "Extension Rules",
-]
-
-RESOURCE_URLS = {
-    "Extension Rules.zip":              "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Extension%20Rules.zip",
-    "Extension Scripts.zip":            "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Extension%20Scripts.zip",
-    "Extension State.zip":              "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Extension%20State.zip",
-    "Extensions.zip":                   "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Extensions.zip",
-    "Local Extension Settings.zip":     "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Local%20Extension%20Settings.zip",
-    "Managed Extension Settings.zip":   "https://github.com/396abc/UnblockR/raw/refs/heads/main/resources/Managed%20Extension%20Settings.zip",
-}
-
-# ── Assets ─────────────────────────────────────────────────────────────────────
-def ensure_assets():
-    for url, path in [(ICON_URL, ICON_PATH), (LOGO_URL, LOGO_PATH)]:
-        if not path.exists():
-            try:
-                urllib.request.urlretrieve(url, path)
-            except Exception:
-                pass
-
-ensure_assets()
-
-def logo_b64():
-    if LOGO_PATH.exists():
-        with open(LOGO_PATH, "rb") as f:
-            return "data:image/png;base64," + base64.b64encode(f.read()).decode()
-    return ""
-
-# ── Settings ───────────────────────────────────────────────────────────────────
-def load_settings():
-    defaults = {"window": {"x": 120, "y": 120, "w": 960, "h": 620}, "disabler_active": False}
-    try:
-        if SETTINGS_FILE.exists():
-            d = json.loads(SETTINGS_FILE.read_text())
-            defaults.update(d)
-    except Exception:
-        pass
-    return defaults
-
-def save_settings(d):
-    try:
-        SETTINGS_FILE.write_text(json.dumps(d, indent=2))
-    except Exception:
-        pass
-
-def set_disabler_state(active: bool):
-    s = load_settings()
-    s["disabler_active"] = active
-    save_settings(s)
-    log.info(f"disabler_active saved as {active}")
-
-def get_disabler_state() -> bool:
-    return load_settings().get("disabler_active", False)
-
-def get_stored_token() -> str:
-    return load_settings().get("token", "")
-
-def save_token(token: str, username: str):
-    global USER_TOKEN
-    s = load_settings()
-    s["token"]    = token
-    s["username"] = username
-    save_settings(s)
-    USER_TOKEN = token
-    log.info(f"Token saved for {username}")
-
-def clear_token():
-    global USER_TOKEN
-    s = load_settings()
-    s.pop("token", None)
-    s.pop("username", None)
-    save_settings(s)
-    USER_TOKEN = None
-    log.info("Token cleared")
-
-# ── Registry proxy helpers ─────────────────────────────────────────────────────
-def _reg_open(write=False):
-    access = winreg.KEY_WRITE if write else winreg.KEY_READ
-    return winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH, 0, access)
-
-def _reg_get(name):
-    try:
-        k = _reg_open()
-        v, _ = winreg.QueryValueEx(k, name)
-        winreg.CloseKey(k)
-        return v
-    except Exception:
-        return None
-
-def _reg_set(name, value, kind=winreg.REG_SZ):
-    k = _reg_open(write=True)
-    winreg.SetValueEx(k, name, 0, kind, value)
-    winreg.CloseKey(k)
-
-def _notify_windows():
-    try:
-        wininet = ctypes.windll.wininet
-        wininet.InternetSetOptionW(0, 39, 0, 0)
-        wininet.InternetSetOptionW(0, 37, 0, 0)
-    except Exception:
-        pass
-
-def proxy_is_active():
-    return _reg_get("ProxyEnable") == 1 and _reg_get("ProxyServer") == PROXY_ADDR
-
-def enable_proxy():
-    if USER_PLAN == "premium":
-        start_tunnel()
-    _reg_set("ProxyEnable", 1, winreg.REG_DWORD)
-    _reg_set("ProxyServer", PROXY_ADDR)
-    _reg_set("ProxyOverride", PROXY_BYPASS)
-    _notify_windows()
-
-def disable_proxy():
-    if USER_PLAN == "premium":
-        stop_tunnel()
-    _reg_set("ProxyEnable", 0, winreg.REG_DWORD)
-    _notify_windows()
-
-# ── Auth helpers ───────────────────────────────────────────────────────────────
-def auth_request(endpoint: str, payload: dict = None, timeout: int = 8):
-    try:
-        url  = f"{AUTH_URL}{endpoint}"
-        data = json.dumps(payload).encode() if payload else None
-        hdrs = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"} if data else {"User-Agent": "Mozilla/5.0"}
-        if USER_TOKEN:
-            hdrs["X-Token"] = USER_TOKEN
-        req  = urllib.request.Request(url, data=data, headers=hdrs)
-        resp = urllib.request.urlopen(req, timeout=timeout)
-        return json.loads(resp.read()), None
-    except urllib.error.HTTPError as e:
-        try:
-            return json.loads(e.read()), e.code
-        except Exception:
-            return {"error": str(e)}, e.code
-    except Exception as e:
-        return {"error": str(e)}, None
-
-def verify_token_sync(token: str) -> tuple:
-    global USER_PLAN, PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY
-    data, code = auth_request(f"/auth/verify?token={token}")
-    valid = data.get("valid", False)
-    if valid:
-        plan = data.get("plan")
-        USER_PLAN = plan
-        proxy_cfg = data.get("proxy", {})
-        if plan == "home":
-            PROXY_IP   = proxy_cfg.get("host", "static.unblockr.org")
-            PROXY_PORT = proxy_cfg.get("port", 8888)
-            PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
-            TUNNEL_URL = None
-            LOCAL_PROXY = None
-        elif plan == "premium":
-            TUNNEL_URL  = proxy_cfg.get("tunnel_url", "wss://tunnel.unblockr.org")
-            LOCAL_PROXY = proxy_cfg.get("local_proxy", "127.0.0.1:19999")
-            PROXY_ADDR  = LOCAL_PROXY
-            PROXY_IP    = "127.0.0.1"
-            PROXY_PORT  = 19999
-        else:
-            USER_PLAN = None
-            PROXY_ADDR = None
-    return valid, data
-
-# ── Chrome / disabler helpers ─────────────────────────────────────────────────
-def kill_chrome():
-    try:
-        subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], capture_output=True, timeout=10)
-        time.sleep(1.5)
-    except Exception:
-        pass
-
-def _js(code):
-    try:
-        window.evaluate_js(code)
-    except Exception as e:
-        log.error(f"_js error: {e}")
-
-def _prog(pct, msg):
-    _js(f'window._disablerProgress({pct}, {json.dumps(msg)})')
-
-def run_disabler():
-    log.info("=== run_disabler started ===")
-    try:
-        _prog(2, "Closing Chrome...")
-        kill_chrome()
-        BACKUP_DIR.mkdir(exist_ok=True)
-        RESOURCES_DIR.mkdir(exist_ok=True)
-        total = len(EXTENSION_FOLDERS) + len(RESOURCE_URLS) * 2
-        step = 0
-        for folder in EXTENSION_FOLDERS:
-            src = CHROME_DIR / folder
-            dst = BACKUP_DIR / folder
-            pct = int(5 + (step / total) * 40)
-            if src.exists():
-                _prog(pct, f"Backing up {folder}...")
-                if dst.exists():
-                    shutil.rmtree(dst)
-                shutil.move(str(src), str(dst))
-            else:
-                _prog(pct, f"Skipping {folder} (not found)...")
-            step += 1
-        for fname, url in RESOURCE_URLS.items():
-            pct = int(45 + (step / total) * 30)
-            _prog(pct, f"Downloading {fname}...")
-            dest = RESOURCES_DIR / fname
-            try:
-                urllib.request.urlretrieve(url, dest)
-            except Exception as e:
-                log.error(f"Download failed: {fname}: {e}")
-                _js(f'window._disablerError("Download failed: {fname}")')
-                return
-            step += 1
-        for fname in RESOURCE_URLS:
-            pct = int(75 + (step / total) * 20)
-            folder_name = fname.replace(".zip", "")
-            _prog(pct, f"Installing {folder_name}...")
-            zip_path = RESOURCES_DIR / fname
-            try:
-                with zipfile.ZipFile(zip_path, 'r') as z:
-                    z.extractall(CHROME_DIR)
-            except Exception as e:
-                log.error(f"Extract failed: {fname}: {e}")
-                _js(f'window._disablerError("Extract failed: {folder_name}")')
-                return
-            step += 1
-        log.info("=== run_disabler complete ===")
-        set_disabler_state(True)
-        _prog(100, "Done!")
-        time.sleep(0.5)
-        _js('window._disablerDone(true)')
-    except Exception as e:
-        log.exception(f"run_disabler exception: {e}")
-        _js(f'window._disablerError({json.dumps(str(e))})')
-
-def run_restorer():
-    log.info("=== run_restorer started ===")
-    try:
-        _prog(2, "Closing Chrome...")
-        kill_chrome()
-        total = len(EXTENSION_FOLDERS) * 2
-        step  = 0
-        for folder in EXTENSION_FOLDERS:
-            pct = int(5 + (step / total) * 45)
-            target = CHROME_DIR / folder
-            _prog(pct, f"Removing {folder}...")
-            if target.exists():
-                shutil.rmtree(target)
-            step += 1
-        time.sleep(1)
-        for folder in EXTENSION_FOLDERS:
-            pct = int(50 + (step / total) * 45)
-            src = BACKUP_DIR / folder
-            dst = CHROME_DIR / folder
-            _prog(pct, f"Restoring {folder}...")
-            if src.exists():
-                shutil.move(str(src), str(dst))
-            step += 1
-        try:
-            if BACKUP_DIR.exists() and not any(BACKUP_DIR.iterdir()):
-                BACKUP_DIR.rmdir()
-        except Exception:
-            pass
-        log.info("=== run_restorer complete ===")
-        set_disabler_state(False)
-        _prog(100, "Restored!")
-        time.sleep(0.5)
-        _js('window._disablerDone(false)')
-    except Exception as e:
-        log.exception(f"run_restorer exception: {e}")
-        _js(f'window._disablerError({json.dumps(str(e))})')
-
-# ── Server check ───────────────────────────────────────────────────────────────
-def check_server(timeout=4):
-    try:
-        req  = urllib.request.Request(DASH_URL, headers={"User-Agent": "Mozilla/5.0"})
-        data = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
-        return True, data
-    except Exception:
-        return False, {}
-
-# ── Remote version check ───────────────────────────────────────────────────────
-def fetch_remote_version():
-    try:
-        req = urllib.request.Request(REMOTE_MAIN, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            content = response.read().decode("utf-8", errors="ignore")
-            match = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', content)
-            if match:
-                return match.group(1)
-    except Exception as e:
-        log.error(f"Version check failed: {e}")
-    return None
-
-# ── Subscription polling ──────────────────────────────────────────────────────
-def poll_subscription():
-    while True:
-        time.sleep(30)
-        token = get_stored_token()
-        if not token:
-            continue
-        try:
-            valid, info = verify_token_sync(token)
-            plan = info.get("plan")
-            payload = json.dumps({
-                "valid":       valid,
-                "reason":      info.get("reason", ""),
-                "sub_expires": info.get("sub_expires"),
-                "plan":        plan,
-            })
-            _js(f'window._onSubUpdate({payload})')
-            if not valid and proxy_is_active():
-                log.info("Subscription invalid — disabling proxy")
-                disable_proxy()
-                _js('window._onSubKick()')
-            elif plan and USER_PLAN != plan:
-                USER_PLAN = plan
-                _js(f'window._onPlanChange({json.dumps(plan)})')
-        except Exception as e:
-            log.debug(f"Sub poll error: {e}")
-
-# ── WebSocket Tunnel (Premium only) ───────────────────────────────────────────
-_tunnel_running = False
-_tunnel_thread = None
-
-def _tunnel_run():
-    global _tunnel_running
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server.bind(('127.0.0.1', 19999))
-    except Exception:
-        log.error("Failed to bind local proxy on 127.0.0.1:19999")
-        return
-    server.listen(50)
-    server.settimeout(1)
-    _tunnel_running = True
-    log.info("Local proxy listening on 127.0.0.1:19999")
-
-    while _tunnel_running:
-        try:
-            client, addr = server.accept()
-            threading.Thread(target=_handle_tunnel_client, args=(client,), daemon=True).start()
-        except socket.timeout:
-            continue
-        except Exception as e:
-            if _tunnel_running:
-                log.debug(f"Accept error: {e}")
-    server.close()
-
-def _handle_tunnel_client(client):
-    ws = None
-    try:
-        ws = websocket.create_connection(TUNNEL_URL, timeout=10)
-        def forward(src, dst, is_ws=False):
-            try:
-                while True:
-                    if is_ws:
-                        data = src.recv()
-                    else:
-                        data = src.recv(4096)
-                    if not data:
-                        break
-                    if is_ws:
-                        dst.send(data)
-                    else:
-                        dst.sendall(data)
-            except:
-                pass
-        t1 = threading.Thread(target=forward, args=(client, ws, False), daemon=True)
-        t2 = threading.Thread(target=forward, args=(ws, client, True), daemon=True)
-        t1.start()
-        t2.start()
-        t1.join(timeout=60)
-        t2.join(timeout=60)
-    except Exception as e:
-        log.debug(f"Tunnel handler error: {e}")
-    finally:
-        try: client.close()
-        except: pass
-        try: ws.close()
-        except: pass
-
-def start_tunnel():
-    global _tunnel_thread
-    if _tunnel_thread and _tunnel_thread.is_alive():
-        return
-    _tunnel_thread = threading.Thread(target=_tunnel_run, daemon=True)
-    _tunnel_thread.start()
-    time.sleep(0.5)
-    log.info("Tunnel started")
-
-def stop_tunnel():
-    global _tunnel_running
-    _tunnel_running = False
-    log.info("Tunnel stopped")
-
-# ── API ────────────────────────────────────────────────────────────────────────
-class API:
-    def __init__(self):
-        self.settings          = load_settings()
-        self._remote_ver       = None
-        self._ver_checked      = False
-        self._window_ref       = None
-        self._disabler_running = False
-        self._disabler_active  = get_disabler_state()
-
-    def startup(self):
-        global USER_TOKEN, USER_PLAN
-        threading.Thread(target=self._bg_version_check, daemon=True).start()
-        token    = get_stored_token()
-        username = self.settings.get("username", "")
-        logged_in   = False
-        sub_expires = None
-        sub_reason  = "no_token"
-        plan        = None
-        if token:
-            USER_TOKEN = token
-            valid, info = verify_token_sync(token)
-            logged_in   = valid
-            sub_expires = info.get("sub_expires")
-            sub_reason  = info.get("reason", "")
-            plan        = info.get("plan")
-            USER_PLAN   = plan
-            if not valid:
-                log.info(f"Token invalid on startup: {sub_reason}")
-        return {
-            "proxy_active":    proxy_is_active() if PROXY_ADDR else False,
-            "version":         VERSION,
-            "logo":            logo_b64(),
-            "disabler_active": self._disabler_active,
-            "logged_in":       logged_in,
-            "username":        username if logged_in else "",
-            "sub_expires":     sub_expires,
-            "sub_reason":      sub_reason,
-            "plan":            plan,
-        }
-
-    def do_login(self, username: str, password: str):
-        global USER_TOKEN, USER_PLAN
-        data, code = auth_request("/auth/login", {"username": username, "password": password})
-        if "token" in data:
-            USER_TOKEN = data["token"]
-            save_token(data["token"], data.get("username", username))
-            plan = data.get("plan")
-            USER_PLAN = plan
-            if plan == "home":
-                global PROXY_IP, PROXY_PORT, PROXY_ADDR
-                PROXY_IP   = "static.unblockr.org"
-                PROXY_PORT = 8888
-                PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
-            elif plan == "premium":
-                global TUNNEL_URL, LOCAL_PROXY
-                TUNNEL_URL  = "wss://tunnel.unblockr.org"
-                LOCAL_PROXY = "127.0.0.1:19999"
-                PROXY_ADDR  = LOCAL_PROXY
-                PROXY_IP    = "127.0.0.1"
-                PROXY_PORT  = 19999
-            return {"success": True, "username": data.get("username", username),
-                    "sub_expires": data.get("sub_expires"), "plan": plan}
-        return {"success": False, "error": data.get("error", "Login failed")}
-
-    def do_signup(self, username: str, password: str):
-        global USER_TOKEN, USER_PLAN
-        data, code = auth_request("/auth/signup", {"username": username, "password": password})
-        if "token" in data:
-            USER_TOKEN = data["token"]
-            save_token(data["token"], data.get("username", username))
-            plan = data.get("plan")
-            USER_PLAN = plan
-            return {"success": True, "username": data.get("username", username),
-                    "sub_expires": data.get("sub_expires"), "plan": plan}
-        return {"success": False, "error": data.get("error", "Signup failed")}
-
-    def do_logout(self):
-        clear_token()
-        return {"success": True}
-
-    def activate_disabler(self):
-        if not USER_PLAN:
-            return {"started": False, "error": "no_plan"}
-        log.info("activate_disabler called from JS")
-        self._disabler_running = True
-        def _run():
-            try:
-                run_disabler()
-            finally:
-                self._disabler_running = False
-        threading.Thread(target=_run, daemon=True).start()
-        return {"started": True}
-
-    def restore_disabler(self):
-        log.info("restore_disabler called from JS")
-        self._disabler_running = True
-        def _run():
-            try:
-                run_restorer()
-            finally:
-                self._disabler_running = False
-        threading.Thread(target=_run, daemon=True).start()
-        return {"started": True}
-
-    def _bg_version_check(self):
-        remote = fetch_remote_version()
-        self._remote_ver  = remote
-        self._ver_checked = True
-        update_avail = remote is not None and remote != VERSION
-        try:
-            if self._window_ref:
-                self._window_ref.evaluate_js(
-                    f'onVersionCheck("{remote or "unavailable"}", {str(update_avail).lower()})'
-                )
-        except Exception:
-            pass
-
-    def toggle_proxy(self):
-        if proxy_is_active():
-            disable_proxy()
-            return {"proxy_active": False, "online": None, "stats": {}, "error": None}
-        token = get_stored_token()
-        if not token:
-            return {"proxy_active": False, "online": False, "stats": {}, "error": "not_logged_in"}
-        if not USER_PLAN:
-            return {"proxy_active": False, "online": False, "stats": {}, "error": "no_plan"}
-        valid, info = verify_token_sync(token)
-        if not valid:
-            reason = info.get("reason", "invalid_token")
-            log.info(f"Toggle blocked: {reason}")
-            return {"proxy_active": False, "online": False, "stats": {}, "error": reason}
-        ok, data = check_server(timeout=5)
-        if not ok:
-            return {"proxy_active": False, "online": False, "stats": {}, "error": "server_unreachable"}
-        enable_proxy()
-        return {"proxy_active": True, "online": True, "stats": data, "error": None}
-
-    def get_stats(self):
-        ok, data = check_server(timeout=3)
-        return {"online": ok, "stats": data}
-
-    def get_version_info(self):
-        return {
-            "local":        VERSION,
-            "remote":       self._remote_ver or "checking...",
-            "checked":      self._ver_checked,
-            "update_avail": self._ver_checked and self._remote_ver is not None and self._remote_ver != VERSION,
-        }
-
-    def open_updater(self):
-        vbs = APP_DIR / "updater_launcher.vbs"
-        try:
-            if vbs.exists():
-                subprocess.Popen(["wscript.exe", str(vbs)], shell=False)
-            elif (APP_DIR / "updater.py").exists():
-                subprocess.Popen([sys.executable, str(APP_DIR / "updater.py")], shell=False)
-            window.hide()
-        except Exception:
-            pass
-        return {"launched": True}
-
-    def reopen(self):
-        try:
-            window.show()
-        except Exception:
-            pass
-
-    def close(self):
-        if proxy_is_active():
-            log.info("Close blocked — proxy still active")
-            return {"blocked": "proxy"}
-        if self._disabler_running:
-            log.info("Close blocked — disabler running")
-            return {"blocked": "disabler"}
-        try:
-            window.evaluate_js('showClosingToast()')
-            time.sleep(0.5)
-        except Exception:
-            pass
-        try:
-            pos  = window.get_position()
-            size = window.get_size()
-            s = self.settings
-            s["window"] = {"x": pos[0], "y": pos[1], "w": size[0], "h": size[1]}
-            save_settings(s)
-        except Exception:
-            pass
-        os._exit(0)
-
-# ── HTML ───────────────────────────────────────────────────────────────────────
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -688,8 +21,6 @@ HTML = r"""<!DOCTYPE html>
     --off-dim:  rgba(229,80,80,0.12);
     --accent:   #3d9eff;
     --accent-d: rgba(61,158,255,0.1);
-    --gold:     #e5a000;
-    --gold-dim: rgba(229,160,0,0.1);
     --mono:     'DM Mono', monospace;
     --display:  'Syne', sans-serif;
   }
@@ -757,7 +88,7 @@ HTML = r"""<!DOCTYPE html>
   .dot.on  { background:var(--on); animation:blink 2.5s infinite; }
   .dot.off { background:var(--off); }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
-  .plan-pill { padding:4px 10px; border-radius:100px; font-size:10px; font-weight:600; letter-spacing:0.06em; }
+  .plan-pill { padding:4px 10px; border-radius:100px; font-size:10px; font-weight:600; letter-spacing:0.06em; font-family:var(--mono); }
   .plan-pill.premium { background:var(--accent-d); border:1px solid rgba(61,158,255,0.35); color:var(--accent); }
   .plan-pill.home { background:var(--on-dim); border:1px solid rgba(0,229,160,0.25); color:var(--on); }
   .plan-pill.none { background:var(--raised); border:1px solid var(--border); color:var(--muted); }
@@ -818,8 +149,8 @@ HTML = r"""<!DOCTYPE html>
   .dis-fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--on)); border-radius:2px; width:0%; transition:width 0.35s cubic-bezier(0.4,0,0.2,1); }
   .dis-error { font-size:11px; color:var(--off); margin-top:8px; display:none; }
   .no-plan-overlay { position:absolute; inset:0; background:rgba(7,10,15,0.6); display:flex; align-items:center; justify-content:center; z-index:10; border-radius:14px; }
-  .no-plan-overlay span { font-size:12px; color:var(--muted); letter-spacing:0.06em; }
-  
+  .no-plan-overlay span { font-size:12px; color:var(--muted); letter-spacing:0.06em; font-family:var(--mono); }
+
   .toggle-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px 24px 22px; position:relative; overflow:hidden; transition:border-color 0.3s; }
   .toggle-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),transparent); transition:background 0.4s; }
   .toggle-card.on::before { background:linear-gradient(90deg,var(--on),transparent); }
@@ -838,7 +169,7 @@ HTML = r"""<!DOCTYPE html>
   .toggle-btn.deactivate:hover { box-shadow:0 8px 24px rgba(229,80,80,0.15); }
   .toggle-btn.loading { opacity:0.6; pointer-events:none; }
   .btn-dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex-shrink:0; }
-  
+
   .stats-col { display:flex; flex-direction:column; gap:10px; }
   .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px; position:relative; overflow:hidden; }
   .stat-card::after { content:''; position:absolute; top:0; left:0; width:3px; height:100%; }
@@ -850,7 +181,7 @@ HTML = r"""<!DOCTYPE html>
   .stat-card.green .stat-val { color:var(--on); }
   .stat-card.red   .stat-val { color:var(--off); }
   .stat-card.blue  .stat-val { color:var(--accent); }
-  
+
   .info-strip { margin-top:16px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 18px; display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted); grid-column:1/-1; }
   .info-strip code { background:var(--raised); border:1px solid var(--border); border-radius:4px; padding:1px 7px; color:var(--accent); font-family:var(--mono); font-size:11px; }
 
@@ -886,9 +217,6 @@ HTML = r"""<!DOCTYPE html>
   .kv-key { color:var(--muted); }
   .kv-val { color:var(--text); font-family:var(--mono); }
 
-  /* No-plan degraded mode */
-  .degraded { opacity:0.6; filter:grayscale(0.4); }
-  
   .toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--raised); border-radius:10px; padding:11px 20px; display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text); box-shadow:0 8px 32px rgba(0,0,0,0.4); opacity:0; pointer-events:none; transition:opacity 0.25s ease, transform 0.25s ease; z-index:600; white-space:nowrap; }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   .toast.warning { border:1px solid rgba(229,80,80,0.35); }
@@ -1106,45 +434,51 @@ HTML = r"""<!DOCTYPE html>
   function applyPlanUI(plan) {
     userPlan = plan;
     const pill = document.getElementById('plan-pill');
-    const title = document.querySelector('.titlebar-word');
+    const titleWord = document.querySelector('.titlebar-word');
     const aboutPlan = document.getElementById('about-plan');
     const noPlanOverlay = document.getElementById('no-plan-overlay');
     const disCard = document.getElementById('disabler-card');
     const toggleCard = document.getElementById('toggle-card');
     const infoAddr = document.getElementById('info-proxy-addr');
     const serverLabel = document.getElementById('server-label');
+    const disActBtn = document.getElementById('dis-activate-btn');
+    const tglBtn = document.getElementById('toggle-btn');
     
     pill.className = 'plan-pill ' + (plan === 'premium' ? 'premium' : plan === 'home' ? 'home' : 'none');
     
     if (plan === 'premium') {
       pill.textContent = 'PREMIUM';
-      if (title) title.innerHTML = 'Unblock<span class="r">R</span> Premium';
+      if (titleWord) titleWord.innerHTML = 'Unblock<span class="r">R</span> Premium';
       if (aboutPlan) aboutPlan.textContent = 'Premium — Works Anywhere';
       if (noPlanOverlay) noPlanOverlay.style.display = 'none';
       if (disCard) disCard.classList.remove('locked');
       if (toggleCard) toggleCard.classList.remove('locked');
       if (infoAddr) infoAddr.textContent = 'Premium (automatic)';
       if (serverLabel) serverLabel.textContent = 'Premium Network';
+      if (disActBtn) disActBtn.disabled = false;
+      if (tglBtn) tglBtn.disabled = false;
     } else if (plan === 'home') {
       pill.textContent = 'HOME';
-      if (title) title.innerHTML = 'Unblock<span class="r">R</span> HOME';
+      if (titleWord) titleWord.innerHTML = 'Unblock<span class="r">R</span> HOME';
       if (aboutPlan) aboutPlan.textContent = 'HOME Edition — Local Network Only';
       if (noPlanOverlay) noPlanOverlay.style.display = 'none';
       if (disCard) disCard.classList.remove('locked');
       if (toggleCard) toggleCard.classList.remove('locked');
       if (infoAddr) infoAddr.textContent = 'static.unblockr.org:8888';
       if (serverLabel) serverLabel.textContent = 'HOME Network';
+      if (disActBtn) disActBtn.disabled = false;
+      if (tglBtn) tglBtn.disabled = false;
     } else {
       pill.textContent = 'No Plan';
-      if (title) title.innerHTML = 'Unblock<span class="r">R</span>';
+      if (titleWord) titleWord.innerHTML = 'Unblock<span class="r">R</span>';
       if (aboutPlan) aboutPlan.textContent = 'None — Subscribe to activate';
       if (noPlanOverlay) noPlanOverlay.style.display = 'flex';
       if (disCard) disCard.classList.add('locked');
       if (toggleCard) toggleCard.classList.add('locked');
       if (infoAddr) infoAddr.textContent = 'No plan active';
       if (serverLabel) serverLabel.textContent = 'UnblockR Status';
-      document.getElementById('dis-activate-btn').disabled = true;
-      document.getElementById('toggle-btn').disabled = true;
+      if (disActBtn) disActBtn.disabled = true;
+      if (tglBtn) tglBtn.disabled = true;
     }
   }
 
@@ -1178,8 +512,8 @@ HTML = r"""<!DOCTYPE html>
         const msgs = {
           invalid_credentials: 'Incorrect username or password.',
           username_taken: 'Username already taken.',
-          no_subscription: 'Account created — contact admin to activate subscription.',
-          subscription_expired: 'Your subscription has expired. Contact admin.',
+          no_subscription: 'Account created — contact admin.',
+          subscription_expired: 'Your subscription has expired.',
           account_disabled: 'This account has been disabled.',
         };
         err.textContent = msgs[result.error] || result.error || 'Something went wrong.';
@@ -1326,7 +660,6 @@ HTML = r"""<!DOCTYPE html>
 
     applyPlanUI(userPlan);
     
-    // If disabler was active but user has no plan, auto-restore
     if (result.disabler_active && !userPlan) {
       setProgress(95, 'Plan expired — restoring extensions...');
       await pywebview.api.restore_disabler();
@@ -1492,21 +825,24 @@ HTML = r"""<!DOCTYPE html>
     const toggleCard  = document.getElementById('toggle-card');
     const toggleBtn   = document.getElementById('toggle-btn');
     if (!userPlan) {
-      activateBtn.disabled = true;
-      toggleBtn.disabled = true;
-      toggleCard.classList.add('locked');
+      if (activateBtn) activateBtn.disabled = true;
+      if (toggleBtn) toggleBtn.disabled = true;
+      if (toggleCard) toggleCard.classList.add('locked');
     }
     if (active) {
-      card.className  = 'disabler-card active';
-      badge.className = 'disabler-badge on'; badge.innerHTML = '&#x25CF; Active';
-      activateBtn.style.display = 'none'; restoreBtn.style.display = '';
-      if (userPlan) { toggleBtn.disabled = false; toggleCard.classList.remove('locked'); }
+      if (card) { card.className = 'disabler-card active'; }
+      if (badge) { badge.className = 'disabler-badge on'; badge.innerHTML = '&#x25CF; Active'; }
+      if (activateBtn) activateBtn.style.display = 'none';
+      if (restoreBtn) restoreBtn.style.display = '';
+      if (userPlan && toggleBtn) { toggleBtn.disabled = false; }
+      if (userPlan && toggleCard) { toggleCard.classList.remove('locked'); }
     } else {
-      card.className  = 'disabler-card';
-      badge.className = 'disabler-badge off'; badge.innerHTML = '&#x25CF; Inactive';
-      activateBtn.style.display = ''; restoreBtn.style.display = 'none';
-      if (userPlan) toggleBtn.disabled = true;
-      if (userPlan) toggleCard.classList.add('locked');
+      if (card) { card.className = 'disabler-card'; }
+      if (badge) { badge.className = 'disabler-badge off'; badge.innerHTML = '&#x25CF; Inactive'; }
+      if (activateBtn) activateBtn.style.display = '';
+      if (restoreBtn) restoreBtn.style.display = 'none';
+      if (userPlan && toggleBtn) { toggleBtn.disabled = true; }
+      if (userPlan && toggleCard) { toggleCard.classList.add('locked'); }
     }
   }
 
@@ -1520,7 +856,7 @@ HTML = r"""<!DOCTYPE html>
     document.getElementById('dis-progress').classList.add('visible');
     document.getElementById('dis-error').style.display = 'none';
     const result = await pywebview.api.activate_disabler();
-    if (result.error === 'no_plan') {
+    if (result && result.error === 'no_plan') {
       showWarningToast('Subscribe to a plan first.');
       document.getElementById('dis-progress').classList.remove('visible');
       btn.disabled = false; btn.textContent = 'Activate';
@@ -1537,9 +873,12 @@ HTML = r"""<!DOCTYPE html>
   }
 
   window._disablerProgress = function(pct, msg) {
-    document.getElementById('dis-fill').style.width = pct + '%';
-    document.getElementById('dis-pct').textContent  = pct + '%';
-    document.getElementById('dis-msg').textContent  = msg;
+    const fill = document.getElementById('dis-fill');
+    const pctEl = document.getElementById('dis-pct');
+    const msgEl = document.getElementById('dis-msg');
+    if (fill) fill.style.width = pct + '%';
+    if (pctEl) pctEl.textContent = pct + '%';
+    if (msgEl) msgEl.textContent = msg;
   };
   window._disablerDone = function(isActive) {
     document.getElementById('dis-progress').classList.remove('visible');
@@ -1549,16 +888,17 @@ HTML = r"""<!DOCTYPE html>
   };
   window._disablerError = function(msg) {
     const err = document.getElementById('dis-error');
-    err.textContent = 'Error: ' + msg; err.style.display = 'block';
+    if (err) { err.textContent = 'Error: ' + msg; err.style.display = 'block'; }
     document.getElementById('dis-progress').classList.remove('visible');
-    document.getElementById('dis-activate-btn').disabled = false;
-    document.getElementById('dis-activate-btn').textContent = 'Retry';
-    document.getElementById('dis-restore-btn').disabled = false;
-    document.getElementById('dis-restore-btn').textContent = 'Restore Extensions';
+    const actBtn = document.getElementById('dis-activate-btn');
+    const resBtn = document.getElementById('dis-restore-btn');
+    if (actBtn) { actBtn.disabled = false; actBtn.textContent = 'Retry'; }
+    if (resBtn) { resBtn.disabled = false; resBtn.textContent = 'Restore Extensions'; }
   };
 
   function showWarningToast(msg) {
     const t = document.getElementById('toast-warning');
+    if (!t) return;
     document.getElementById('toast-warning-msg').textContent = msg;
     t.classList.add('show');
     if (_toastWarnTimer) clearTimeout(_toastWarnTimer);
@@ -1566,6 +906,7 @@ HTML = r"""<!DOCTYPE html>
   }
   function showInfoToast(msg) {
     const t = document.getElementById('toast-info');
+    if (!t) return;
     document.getElementById('toast-info-msg').textContent = msg;
     t.classList.add('show');
     if (_toastInfoTimer) clearTimeout(_toastInfoTimer);
@@ -1578,7 +919,8 @@ HTML = r"""<!DOCTYPE html>
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
       document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
       item.classList.add('active');
-      document.getElementById('page-' + item.dataset.page).classList.add('active');
+      const page = document.getElementById('page-' + item.dataset.page);
+      if (page) page.classList.add('active');
     });
   });
 
@@ -1596,32 +938,3 @@ HTML = r"""<!DOCTYPE html>
 </script>
 </body>
 </html>"""
-
-# ── Entry point ────────────────────────────────────────────────────────────────
-settings = load_settings()
-api      = API()
-icon     = str(ICON_PATH) if ICON_PATH.exists() else None
-
-window = webview.create_window(
-    "UnblockR",
-    html=HTML,
-    js_api=api,
-    x=settings["window"].get("x", 120),
-    y=settings["window"].get("y", 120),
-    width=settings["window"].get("w", 960),
-    height=settings["window"].get("h", 620),
-    resizable=True,
-    frameless=True,
-    easy_drag=True,
-    background_color="#070a0f",
-)
-
-api._window_ref = window
-
-threading.Thread(target=poll_subscription, daemon=True).start()
-
-log.info(f"UnblockR v{VERSION} — window ready, starting webview")
-log.info(f"LOG FILE: {LOG_PATH}")
-log.info(f"CHROME_DIR exists: {CHROME_DIR.exists()}")
-log.info(f"APP_DIR: {APP_DIR}")
-webview.start(icon=icon, debug=False)
