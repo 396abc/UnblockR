@@ -128,7 +128,7 @@ echo title Installing Python 3.13 - Please Wait
 echo echo Installing Python 3.13 via winget...
 echo echo.
 echo winget install -e --id Python.Python.3.13 --accept-source-agreements
-echo if %%errorlevel%% equ 0 ^(
+echo if !errorlevel! equ 0 ^(
 echo     echo.
 echo     echo [SUCCESS] Python 3.13 has been installed successfully^^!
 echo ^) else ^(
@@ -219,11 +219,11 @@ call :install_python
 :pk
 set pf=0
 
-call :run 25 "Installing pywebview" "python -c \"import webview\" 2>nul || pip install pywebview --upgrade -q 2>nul || python -m pip install pywebview --upgrade -q 2>nul"
+call :run 25 "Installing pywebview" "python -c ""import webview"" 2>nul || pip install pywebview --upgrade -q 2>nul || python -m pip install pywebview --upgrade -q 2>nul"
 
-call :run 35 "Installing psutil" "python -c \"import psutil\" 2>nul || pip install psutil --upgrade -q 2>nul || python -m pip install psutil --upgrade -q 2>nul"
+call :run 35 "Installing psutil" "python -c ""import psutil"" 2>nul || pip install psutil --upgrade -q 2>nul || python -m pip install psutil --upgrade -q 2>nul"
 
-call :run 45 "Installing websocket-client" "python -c \"import websocket\" 2>nul || pip install websocket-client --upgrade -q 2>nul || python -m pip install websocket-client --upgrade -q 2>nul"
+call :run 45 "Installing websocket-client" "python -c ""import websocket"" 2>nul || pip install websocket-client --upgrade -q 2>nul || python -m pip install websocket-client --upgrade -q 2>nul"
 
 ::downloads
 
@@ -231,26 +231,26 @@ call :run 45 "Installing websocket-client" "python -c \"import websocket\" 2>nul
 if not exist "%id%" mkdir "%id%" >nul 2>nul
 set df=0
 
-call :run 55 "Downloading application core" "powershell -NoProfile -Command \"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')\" >nul 2>nul"
+call :run 55 "Downloading application core" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')"" >nul 2>nul"
 if not exist "%id%\main.py" set df=1
 
-call :run 62 "Downloading updater" "powershell -NoProfile -Command \"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')\" >nul 2>nul"
+call :run 62 "Downloading updater" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')"" >nul 2>nul"
 
-call :run 68 "Downloading launchers" "powershell -NoProfile -Command \"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')\" >nul 2>nul"
+call :run 68 "Downloading launchers" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')"" >nul 2>nul"
 if not exist "%id%\launcher.vbs" (
     echo Dim sDir > "%id%\launcher.vbs"
     echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\launcher.vbs"
     echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\main.py" ^& Chr^(34^), 0, False >> "%id%\launcher.vbs"
 )
 
-call :run 75 "Downloading updater launcher" "powershell -NoProfile -Command \"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')\" >nul 2>nul"
+call :run 75 "Downloading updater launcher" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')"" >nul 2>nul"
 if not exist "%id%\updater_launcher.vbs" (
     echo Dim sDir > "%id%\updater_launcher.vbs"
     echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\updater_launcher.vbs"
     echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\updater.py" ^& Chr^(34^), 0, False >> "%id%\updater_launcher.vbs"
 )
 
-call :run 82 "Downloading assets" "powershell -NoProfile -Command \"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')\" >nul 2>nul"
+call :run 82 "Downloading assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')"" >nul 2>nul"
 
 call :t 88 "Writing config"
 if not exist "%id%\settings.json" (
@@ -261,10 +261,10 @@ if %df% equ 1 call :f "Download failed. Check your internet connection."
 
 ::shortcuts
 
-call :run 92 "Creating shortcuts" "powershell -NoProfile -Command \"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\\\"\"\"%id%\launcher.vbs\\\"\"\"'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()\" >nul 2>nul"
+call :run 92 "Creating shortcuts" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
 if not exist "%sm%\UnblockR" mkdir "%sm%\UnblockR" >nul 2>nul
-call :run 96 "Adding to Start Menu" "powershell -NoProfile -Command \"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\\\"\"\"%id%\launcher.vbs\\\"\"\"'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()\" >nul 2>nul"
+call :run 96 "Adding to Start Menu" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
 call :t 100 "Almost there"
 
@@ -278,7 +278,13 @@ echo  You can search for this program by pressing the windows key and typing "Un
 echo  Installation path: %id%
 echo.
 
+:: Launch the application
 start "" wscript.exe "%id%\launcher.vbs"
 
-timeout /t 4 /nobreak >nul
+:: Clean up temporary files
+if exist "%TEMP%\install_python.bat" del "%TEMP%\install_python.bat" >nul 2>nul
+if exist "%TEMP%\ubr_done.flag" del "%TEMP%\ubr_done.flag" >nul 2>nul
+
+:: Exit without restarting or re-launching anything
+timeout /t 2 /nobreak >nul
 exit /b 0
