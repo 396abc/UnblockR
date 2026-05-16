@@ -37,7 +37,7 @@ set "br="
 set "i=0"
 :bl1
 if !i! lss %d% (
-    set "br=!br!="
+    set "br=!br!#"
     set /a "i+=1"
     goto bl1
 )
@@ -101,7 +101,7 @@ echo  !e![91m[FAIL] %~1!e![0m
 echo.
 echo  !e![91mPress any key to exit...!e![0m
 pause >nul
-exit /b 1
+exit
 
 ::main
 
@@ -123,11 +123,12 @@ if !errorlevel! equ 0 (
 
 call :run 8 "Installing Python via winget" "winget install -e --id Python.Python.3.13 --silent --accept-source-agreements >nul 2>nul"
 
-set "PATH=%PATH%;C:\Program Files\Python313\Scripts;C:\Program Files\Python313;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313"
-
-python --version >nul 2>nul
-if !errorlevel! neq 0 call :f "Python not detected after install. Reboot and try again."
-for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
+set "pypath="
+if exist "C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\python.exe" set "pypath=C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313"
+if exist "C:\Program Files\Python313\python.exe" set "pypath=C:\Program Files\Python313"
+if not defined pypath call :f "Python not detected after install. Reboot and try again."
+set "PATH=!pypath!;!pypath!\Scripts;%PATH%"
+for /f "tokens=*" %%i in ('"!pypath!\python.exe" --version 2^>^&1') do set pv=%%i
 call :t 15 "!pv! installed"
 ::packages
 
