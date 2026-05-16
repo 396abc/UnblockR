@@ -1,5 +1,5 @@
 @echo off
-chcp 65001 >nul 2>nul
+chcp 437 >nul 2>nul
 title UnblockR Installer
 setlocal enabledelayedexpansion
 
@@ -7,7 +7,7 @@ setlocal enabledelayedexpansion
 set rb=https://github.com/396abc/UnblockR/raw/refs/heads/main
 set id=%LOCALAPPDATA%\UnblockR
 set sm=%APPDATA%\Microsoft\Windows\Start Menu\Programs
-for /f %%a in ('echo prompt $E ^| cmd') do set "e=%%a"
+for /f "delims=" %%a in ('forfiles /p "%~dp0." /m "%~nx0" /c "cmd /c echo 0x1B"') do set "e=%%a"
 set "ds=0"
 set "dd=   "
 
@@ -36,7 +36,7 @@ set "br="
 set "i=0"
 :bl1
 if !i! lss %d% (
-    set "br=!br!█"
+    set "br=!br!#"
     set /a "i+=1"
     goto bl1
 )
@@ -44,7 +44,7 @@ set "em="
 set "j=0"
 :bl2
 if !j! lss %l% (
-    set "em=!em!░"
+    set "em=!em! "
     set /a "j+=1"
     goto bl2
 )
@@ -204,7 +204,8 @@ echo  %id%
 echo.
 
 start "" wscript.exe "%id%\launcher.vbs"
-echo CreateObject^("WScript.Shell"^).Run "cmd /c timeout /t 3 /nobreak >nul & del ""%~f0""", 0, False > "%TEMP%\ubr_cleanup.vbs"
-wscript.exe "%TEMP%\ubr_cleanup.vbs"
+echo Set s=CreateObject^("WScript.Shell"^) > "%TEMP%\ubr_cleanup.vbs"
+echo s.Run "cmd /c ping 127.0.0.1 -n 4 >nul ^& del """ ^& WScript.Arguments^(0^) ^& """", 0, False >> "%TEMP%\ubr_cleanup.vbs"
+wscript.exe "%TEMP%\ubr_cleanup.vbs" "%~f0"
 timeout /t 4 /nobreak >nul
 exit /b 0
