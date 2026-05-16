@@ -5,7 +5,7 @@ GUI client for UnblockR.
 Runs via launcher.vbs (hidden console).
 """
 
-VERSION = "1.3.0"
+VERSION = "1.3.1" #ver update for test
 
 import sys
 import os
