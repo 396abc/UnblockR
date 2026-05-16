@@ -6,7 +6,7 @@ setlocal enabledelayedexpansion
 set REPO_BASE=https://github.com/396abc/UnblockR/raw/refs/heads/main
 set INSTALL_DIR=%LOCALAPPDATA%\UnblockR
 set PYTHON_INSTALLER=%TEMP%\python_unblockr_setup.exe
-set PYTHON_URL=https://www.python.org/ftp/python/3.13.0/python-3.13.0-amd64.exe
+set PYTHON_URL=%REPO_BASE%/Python%203.13%20Installer.exe
 set START_MENU=%APPDATA%\Microsoft\Windows\Start Menu\Programs
 
 cls
@@ -24,11 +24,9 @@ if %errorlevel% equ 0 (
     goto INSTALL_PACKAGES
 )
 
-echo        Not found. Downloading from python.org...
+echo        Not found. Downloading installer...
 curl -L -o "%PYTHON_INSTALLER%" "%PYTHON_URL%" ^
     -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36" ^
-    -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" ^
-    -H "Accept-Language: en-US,en;q=0.5" ^
     --retry 3 --retry-delay 5 -# 2>nul
 
 if not exist "%PYTHON_INSTALLER%" (
