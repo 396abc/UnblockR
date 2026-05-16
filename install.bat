@@ -239,21 +239,25 @@ call :run 90 "Creating shortcuts" "powershell -NoProfile -Command ""$ws = New-Ob
 if not exist "%sm%\UnblockR" mkdir "%sm%\UnblockR" >nul 2>nul
 call :run 95 "Adding to Start Menu" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
-call :t 100 "Almost there"
+::done - Final display before launching
+call :t 100 "Finalizing installation..."
+timeout /t 2 /nobreak >nul
 
-::done
-
-call :t 100 "Done!"
+call :h
 echo.
-echo  UnblockR installed successfully!
-echo  UnblockR will automatically launch soon, and has been added to the Start Menu.
-echo  You can search for this program by pressing the windows key and typing "UnblockR".
-echo  Installation path: %id%
+echo  !e![92mUnblockR installed successfully!!e![0m
 echo.
+echo  !e![96mUnblockR will launch in 3 seconds...!e![0m
+echo  You can also find it in the Start Menu by typing "UnblockR"
+echo.
+echo  Installation path: !e![90m%id%!e![0m
+echo.
+timeout /t 3 /nobreak >nul
 
+:: Launch the application
 start "" wscript.exe "%id%\launcher.vbs"
 
 :: Cleanup
 del "%installer_flag%" >nul 2>nul
-timeout /t 4 /nobreak >nul
+timeout /t 2 /nobreak >nul
 exit /b 0
