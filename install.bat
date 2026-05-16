@@ -9,6 +9,15 @@ set id=%LOCALAPPDATA%\UnblockR
 set sm=%APPDATA%\Microsoft\Windows\Start Menu\Programs
 for /f "delims=" %%a in ('forfiles /p "%~dp0." /m "%~nx0" /c "cmd /c echo 0x1B"') do set "e=%%a"
 
+:: Prevent multiple instances
+set "installer_flag=%TEMP%\ubr_installer_running.flag"
+if exist "%installer_flag%" (
+    echo Installer is already running...
+    timeout /t 2 /nobreak >nul
+    exit /b 0
+)
+echo %DATE% %TIME% > "%installer_flag%"
+
 goto m
 
 ::header
@@ -107,132 +116,87 @@ echo  !e![91m[FAIL] %~1!e![0m
 echo.
 echo  !e![91mPress any key to exit...!e![0m
 pause >nul
+del "%installer_flag%" >nul 2>nul
 exit /b 1
 
-::manual python install with new window
+::install python automatically
 
-:install_python
-echo Starting Python 3.13 installation in a new window...
+:install_python_auto
+call :t 5 "Python not found. Installing Python 3.13..."
 echo.
-echo IMPORTANT: A new Command Prompt window will open to install Python.
-echo Please wait for the installation to complete, then return here and type 'y'
-echo.
-echo Press any key to open the Python installation window...
-pause >nul
+echo Installing Python 3.13 via winget. This may take a moment...
 
-:: Create a temporary batch script to run winget in a new window
-set "py_install_script=%TEMP%\install_python.bat"
-(
-echo @echo off
-echo title Installing Python 3.13 - Please Wait
-echo echo Installing Python 3.13 via winget...
-echo echo.
-echo winget install -e --id Python.Python.3.13 --accept-source-agreements
-echo if !errorlevel! equ 0 ^(
-echo     echo.
-echo     echo [SUCCESS] Python 3.13 has been installed successfully^^!
-echo ^) else ^(
-echo     echo.
-echo     echo [NOTE] Winget may show an error even if Python installed correctly.
-echo     echo Please check if Python 3.13 is now installed on your system.
-echo ^)
-echo echo.
-echo echo If Python installed successfully, you can close this window.
-echo echo If it failed, please install manually from python.org
-echo echo.
-echo echo This window will close in 10 seconds...
-echo timeout /t 10 /nobreak ^>nul
-) > "%py_install_script%"
+:: Run winget installation
+winget install -e --id Python.Python.3.13 --accept-source-agreements --silent >nul 2>nul
+set winget_result=!errorlevel!
 
-:: Open new cmd window with the installation script
-start "" cmd /c "%py_install_script%"
-
-:: Manual confirmation loop
-:wait_for_python
-echo.
-call :t 10 "Waiting for Python installation..."
-echo.
-set /p "py_installed=Has Python finished installing? (y/n): "
-if /i "!py_installed!"=="y" goto :verify_python
-if /i "!py_installed!"=="n" (
-    echo Please wait for the Python installation to complete.
-    echo Check the other Command Prompt window for progress.
-    timeout /t 2 /nobreak >nul
-    goto wait_for_python
-)
-echo Invalid input. Please enter 'y' or 'n'.
-goto wait_for_python
-
-:verify_python
-call :t 15 "Verifying Python installation..."
+:: Wait a moment for installation to finalize
+timeout /t 3 /nobreak >nul
 
 :: Update PATH to include Python paths
 set "PATH=%PATH%;C:\Program Files\Python313\Scripts;C:\Program Files\Python313;C:\Program Files\Python313\Lib\site-packages\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313"
 
-:: Check if Python is now available
+:: Refresh environment in current session
+call :refresh_path
+
+:: Verify Python installation
 python --version >nul 2>nul
 if !errorlevel! equ 0 (
     for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
-    call :t 20 "!pv! ready"
-    goto pk
+    call :t 15 "!pv! installed successfully"
+    goto :eof
 )
 
 :: Try checking common installation paths
 if exist "C:\Program Files\Python313\python.exe" (
     set "PATH=%PATH%;C:\Program Files\Python313;C:\Program Files\Python313\Scripts"
     for /f "tokens=*" %%i in ('C:\Program Files\Python313\python.exe --version 2^>^&1') do set pv=%%i
-    call :t 20 "!pv! ready"
-    goto pk
+    call :t 15 "!pv! installed successfully"
+    goto :eof
 )
 
 if exist "C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\python.exe" (
     set "PATH=%PATH%;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts"
     for /f "tokens=*" %%i in ('C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\python.exe --version 2^>^&1') do set pv=%%i
-    call :t 20 "!pv! ready"
-    goto pk
+    call :t 15 "!pv! installed successfully"
+    goto :eof
 )
 
-call :f "Python not detected after install. Please reboot and run the installer again."
+call :f "Python installation failed. Please install Python 3.13 manually from python.org"
+goto :eof
+
+:refresh_path
+:: Refresh PATH without requiring restart
+for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "syspath=%%b"
+for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "userpath=%%b"
+set "PATH=%syspath%;%userpath%"
 goto :eof
 
 ::main
 
 :m
-:: Check if we're already running to prevent re-launch
-set "installer_flag=%TEMP%\ubr_installer_running.flag"
-if exist "%installer_flag%" (
-    echo Installer is already running...
-    timeout /t 2 /nobreak >nul
-    exit /b 0
-)
-echo %DATE% %TIME% > "%installer_flag%"
-
 call :t 0 "Booting up"
 timeout /t 1 >nul
 
-::python check
-
-call :t 5 "Checking for Python"
+::python check and auto install
+call :t 3 "Checking for Python"
 python --version >nul 2>nul
 if !errorlevel! equ 0 (
     for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
     call :t 10 "!pv! found"
-    goto pk
+) else (
+    call :install_python_auto
 )
 
-:: If Python not found, open new window for manual installation
-call :install_python
-
 ::packages
-
 :pk
 set pf=0
 
-call :run 25 "Installing pywebview" "python -c ""import webview"" 2>nul || pip install pywebview --upgrade -q 2>nul || python -m pip install pywebview --upgrade -q 2>nul"
+call :run 20 "Installing pywebview" "python -c ""import webview"" 2>nul || pip install pywebview --upgrade -q 2>nul || python -m pip install pywebview --upgrade -q 2>nul"
 
-call :run 35 "Installing psutil" "python -c ""import psutil"" 2>nul || pip install psutil --upgrade -q 2>nul || python -m pip install psutil --upgrade -q 2>nul"
+call :run 30 "Installing psutil" "python -c ""import psutil"" 2>nul || pip install psutil --upgrade -q 2>nul || python -m pip install psutil --upgrade -q 2>nul"
 
-call :run 45 "Installing websocket-client" "python -c ""import websocket"" 2>nul || pip install websocket-client --upgrade -q 2>nul || python -m pip install websocket-client --upgrade -q 2>nul"
+call :run 40 "Installing websocket-client" "python -c ""import websocket"" 2>nul || pip install websocket-client --upgrade -q 2>nul || python -m pip install websocket-client --upgrade -q 2>nul"
 
 ::downloads
 
@@ -240,28 +204,28 @@ call :run 45 "Installing websocket-client" "python -c ""import websocket"" 2>nul
 if not exist "%id%" mkdir "%id%" >nul 2>nul
 set df=0
 
-call :run 55 "Downloading application core" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')"" >nul 2>nul"
+call :run 50 "Downloading application core" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')"" >nul 2>nul"
 if not exist "%id%\main.py" set df=1
 
-call :run 62 "Downloading updater" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')"" >nul 2>nul"
+call :run 57 "Downloading updater" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')"" >nul 2>nul"
 
-call :run 68 "Downloading launchers" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')"" >nul 2>nul"
+call :run 63 "Downloading launchers" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')"" >nul 2>nul"
 if not exist "%id%\launcher.vbs" (
     echo Dim sDir > "%id%\launcher.vbs"
     echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\launcher.vbs"
     echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\main.py" ^& Chr^(34^), 0, False >> "%id%\launcher.vbs"
 )
 
-call :run 75 "Downloading updater launcher" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')"" >nul 2>nul"
+call :run 70 "Downloading updater launcher" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')"" >nul 2>nul"
 if not exist "%id%\updater_launcher.vbs" (
     echo Dim sDir > "%id%\updater_launcher.vbs"
     echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\updater_launcher.vbs"
     echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\updater.py" ^& Chr^(34^), 0, False >> "%id%\updater_launcher.vbs"
 )
 
-call :run 82 "Downloading assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')"" >nul 2>nul"
+call :run 78 "Downloading assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')"" >nul 2>nul"
 
-call :t 88 "Writing config"
+call :t 85 "Writing config"
 if not exist "%id%\settings.json" (
     echo {"window":{"x":120,"y":120,"w":940,"h":620},"disabler_active":false} > "%id%\settings.json"
 )
@@ -270,10 +234,10 @@ if %df% equ 1 call :f "Download failed. Check your internet connection."
 
 ::shortcuts
 
-call :run 92 "Creating shortcuts" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
+call :run 90 "Creating shortcuts" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
 if not exist "%sm%\UnblockR" mkdir "%sm%\UnblockR" >nul 2>nul
-call :run 96 "Adding to Start Menu" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
+call :run 95 "Adding to Start Menu" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
 call :t 100 "Almost there"
 
@@ -291,6 +255,5 @@ start "" wscript.exe "%id%\launcher.vbs"
 
 :: Cleanup
 del "%installer_flag%" >nul 2>nul
-set "py_install_script="
 timeout /t 4 /nobreak >nul
 exit /b 0
