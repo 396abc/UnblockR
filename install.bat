@@ -66,6 +66,7 @@ del "%dflag%" >nul 2>nul
 start /b "" cmd /c "%rcmd% & echo done > "%dflag%""
 set "dc=0"
 set "elapsed=0"
+set "slowmsg=0"
 :runloop
 if exist "%dflag%" (
     del "%dflag%" >nul 2>nul
@@ -73,15 +74,21 @@ if exist "%dflag%" (
 )
 set /a "dc=(dc+1)%%4"
 set /a "elapsed+=1"
-if !dc! equ 0 call :b !rp! "!rmsg!   "
-if !dc! equ 1 call :b !rp! "!rmsg!.  "
-if !dc! equ 2 call :b !rp! "!rmsg!.. "
-if !dc! equ 3 (
-    if !elapsed! geq 15 (
+if !elapsed! geq 15 (
+    if !slowmsg! equ 0 (
+        set "slowmsg=1"
         call :b !rp! "!rmsg!..." "Still running, just taking a moment"
     ) else (
-        call :b !rp! "!rmsg!..."
+        if !dc! equ 0 call :b !rp! "!rmsg!   " "Still running, just taking a moment"
+        if !dc! equ 1 call :b !rp! "!rmsg!.  " "Still running, just taking a moment"
+        if !dc! equ 2 call :b !rp! "!rmsg!.. " "Still running, just taking a moment"
+        if !dc! equ 3 call :b !rp! "!rmsg!..." "Still running, just taking a moment"
     )
+) else (
+    if !dc! equ 0 call :b !rp! "!rmsg!   "
+    if !dc! equ 1 call :b !rp! "!rmsg!.  "
+    if !dc! equ 2 call :b !rp! "!rmsg!.. "
+    if !dc! equ 3 call :b !rp! "!rmsg!..."
 )
 timeout /t 1 /nobreak >nul
 goto runloop
