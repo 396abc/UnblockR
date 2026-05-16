@@ -5,7 +5,7 @@ GUI client for UnblockR.
 Runs via launcher.vbs (hidden console).
 """
 
-VERSION = "1.2.3"
+VERSION = "1.3.0"
 
 import sys
 import os
@@ -16,7 +16,7 @@ import subprocess
 import urllib.request
 import urllib.error
 import threading
-import asyncio
+import socket
 import websocket
 import time
 import shutil
@@ -25,6 +25,7 @@ import logging
 from pathlib import Path
 import base64
 import re
+import random
 
 try:
     import webview
@@ -33,11 +34,31 @@ except ImportError:
     import webview
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-TUNNEL_URL   = "wss://tunnel.unblockr.org"
-LOCAL_PROXY  = "127.0.0.1:19999"
-PROXY_ADDR   = LOCAL_PROXY
 APP_DIR     = Path(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_FILE = APP_DIR / "settings.json"
+
+# These are set dynamically based on plan
+PROXY_IP    = None
+PROXY_PORT  = None
+PROXY_ADDR  = None
+TUNNEL_URL  = None
+LOCAL_PROXY = None
+USER_PLAN   = None
+USER_TOKEN  = None
+
+AUTH_URL     = "https://auth.unblockr.org"
+DASH_URL     = "https://dash.unblockr.org/api/stats"
+REMOTE_MAIN  = "https://raw.githubusercontent.com/396abc/UnblockR/main/main.py"
+
+ICON_URL    = "https://github.com/396abc/UnblockR/raw/refs/heads/main/UnblockR.ico"
+LOGO_URL    = "https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png"
+
+REG_PATH     = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+PROXY_BYPASS = "localhost;127.*;192.168.*;<local>"
+
+CHROME_DIR    = Path(os.environ.get("LOCALAPPDATA","")) / "Google/Chrome/User Data/Default"
+BACKUP_DIR    = APP_DIR / "backups"
+RESOURCES_DIR = APP_DIR / "resources"
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 LOG_PATH = APP_DIR / "unblockr.log"
@@ -53,26 +74,10 @@ log = logging.getLogger("UnblockR")
 
 ICON_PATH   = APP_DIR / "UnblockR.ico"
 LOGO_PATH   = APP_DIR / "UnblockR.png"
-ICON_URL    = "https://github.com/396abc/UnblockR/raw/refs/heads/main/UnblockR.ico"
-LOGO_URL    = "https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png"
-REMOTE_MAIN = "https://raw.githubusercontent.com/396abc/UnblockR/main/main.py"
-
-REG_PATH     = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-PROXY_BYPASS = "localhost;127.*;192.168.*;<local>"
-DASH_URL     = "https://dash.unblockr.org/api/stats"
-AUTH_URL     = "https://auth.unblockr.org"
-
-CHROME_DIR    = Path(os.environ.get("LOCALAPPDATA","")) / "Google/Chrome/User Data/Default"
-BACKUP_DIR    = APP_DIR / "backups"
-RESOURCES_DIR = APP_DIR / "resources"
 
 EXTENSION_FOLDERS = [
-    "Extension Scripts",
-    "Extensions",
-    "Managed Extension Settings",
-    "Local Extension Settings",
-    "Extension State",
-    "Extension Rules",
+    "Extension Scripts", "Extensions", "Managed Extension Settings",
+    "Local Extension Settings", "Extension State", "Extension Rules",
 ]
 
 RESOURCE_URLS = {
@@ -94,13 +99,6 @@ def ensure_assets():
                 pass
 
 ensure_assets()
-
-_flag = APP_DIR / ".reopen_main"
-if _flag.exists():
-    try:
-        _flag.unlink()
-    except Exception:
-        pass
 
 def logo_b64():
     if LOGO_PATH.exists():
@@ -138,17 +136,21 @@ def get_stored_token() -> str:
     return load_settings().get("token", "")
 
 def save_token(token: str, username: str):
+    global USER_TOKEN
     s = load_settings()
     s["token"]    = token
     s["username"] = username
     save_settings(s)
+    USER_TOKEN = token
     log.info(f"Token saved for {username}")
 
 def clear_token():
+    global USER_TOKEN
     s = load_settings()
     s.pop("token", None)
     s.pop("username", None)
     save_settings(s)
+    USER_TOKEN = None
     log.info("Token cleared")
 
 # ── Registry proxy helpers ─────────────────────────────────────────────────────
@@ -180,14 +182,18 @@ def _notify_windows():
 
 def proxy_is_active():
     return _reg_get("ProxyEnable") == 1 and _reg_get("ProxyServer") == PROXY_ADDR
+
 def enable_proxy():
-    start_tunnel()
+    if USER_PLAN == "premium":
+        start_tunnel()
     _reg_set("ProxyEnable", 1, winreg.REG_DWORD)
     _reg_set("ProxyServer", PROXY_ADDR)
     _reg_set("ProxyOverride", PROXY_BYPASS)
     _notify_windows()
+
 def disable_proxy():
-    stop_tunnel()
+    if USER_PLAN == "premium":
+        stop_tunnel()
     _reg_set("ProxyEnable", 0, winreg.REG_DWORD)
     _notify_windows()
 
@@ -197,6 +203,8 @@ def auth_request(endpoint: str, payload: dict = None, timeout: int = 8):
         url  = f"{AUTH_URL}{endpoint}"
         data = json.dumps(payload).encode() if payload else None
         hdrs = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"} if data else {"User-Agent": "Mozilla/5.0"}
+        if USER_TOKEN:
+            hdrs["X-Token"] = USER_TOKEN
         req  = urllib.request.Request(url, data=data, headers=hdrs)
         resp = urllib.request.urlopen(req, timeout=timeout)
         return json.loads(resp.read()), None
@@ -208,9 +216,30 @@ def auth_request(endpoint: str, payload: dict = None, timeout: int = 8):
     except Exception as e:
         return {"error": str(e)}, None
 
-def verify_token_sync(token: str) -> tuple[bool, dict]:
+def verify_token_sync(token: str) -> tuple:
+    global USER_PLAN, PROXY_IP, PROXY_PORT, PROXY_ADDR, TUNNEL_URL, LOCAL_PROXY
     data, code = auth_request(f"/auth/verify?token={token}")
-    return data.get("valid", False), data
+    valid = data.get("valid", False)
+    if valid:
+        plan = data.get("plan")
+        USER_PLAN = plan
+        proxy_cfg = data.get("proxy", {})
+        if plan == "home":
+            PROXY_IP   = proxy_cfg.get("host", "static.unblockr.org")
+            PROXY_PORT = proxy_cfg.get("port", 8888)
+            PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+            TUNNEL_URL = None
+            LOCAL_PROXY = None
+        elif plan == "premium":
+            TUNNEL_URL  = proxy_cfg.get("tunnel_url", "wss://tunnel.unblockr.org")
+            LOCAL_PROXY = proxy_cfg.get("local_proxy", "127.0.0.1:19999")
+            PROXY_ADDR  = LOCAL_PROXY
+            PROXY_IP    = "127.0.0.1"
+            PROXY_PORT  = 19999
+        else:
+            USER_PLAN = None
+            PROXY_ADDR = None
+    return valid, data
 
 # ── Chrome / disabler helpers ─────────────────────────────────────────────────
 def kill_chrome():
@@ -220,19 +249,13 @@ def kill_chrome():
     except Exception:
         pass
 
-def disabler_is_active():
-    return get_disabler_state()
-
 def _js(code):
-    log.debug(f"JS call: {code[:120]}")
     try:
         window.evaluate_js(code)
-        log.debug("JS call succeeded")
     except Exception as e:
         log.error(f"_js error: {e}")
 
 def _prog(pct, msg):
-    log.debug(f"Progress {pct}%: {msg}")
     _js(f'window._disablerProgress({pct}, {json.dumps(msg)})')
 
 def run_disabler():
@@ -240,13 +263,9 @@ def run_disabler():
     try:
         _prog(2, "Closing Chrome...")
         kill_chrome()
-        log.info("Chrome killed")
         BACKUP_DIR.mkdir(exist_ok=True)
         RESOURCES_DIR.mkdir(exist_ok=True)
-        log.info(f"CHROME_DIR={CHROME_DIR}")
-        n_folders = len(EXTENSION_FOLDERS)
-        n_zips    = len(RESOURCE_URLS)
-        total     = n_folders + n_zips + n_zips
+        total = len(EXTENSION_FOLDERS) + len(RESOURCE_URLS) * 2
         step = 0
         for folder in EXTENSION_FOLDERS:
             src = CHROME_DIR / folder
@@ -352,9 +371,8 @@ def fetch_remote_version():
         log.error(f"Version check failed: {e}")
     return None
 
-# ── Subscription polling (background) ─────────────────────────────────────────
+# ── Subscription polling ──────────────────────────────────────────────────────
 def poll_subscription():
-    """Every 30s re-verify the token and push subscription info to JS."""
     while True:
         time.sleep(30)
         token = get_stored_token()
@@ -362,37 +380,85 @@ def poll_subscription():
             continue
         try:
             valid, info = verify_token_sync(token)
-            sub_expires = info.get("sub_expires")
+            plan = info.get("plan")
             payload = json.dumps({
                 "valid":       valid,
                 "reason":      info.get("reason", ""),
-                "sub_expires": sub_expires,
+                "sub_expires": info.get("sub_expires"),
+                "plan":        plan,
             })
             _js(f'window._onSubUpdate({payload})')
             if not valid and proxy_is_active():
                 log.info("Subscription invalid — disabling proxy")
                 disable_proxy()
                 _js('window._onSubKick()')
+            elif plan and USER_PLAN != plan:
+                USER_PLAN = plan
+                _js(f'window._onPlanChange({json.dumps(plan)})')
         except Exception as e:
             log.debug(f"Sub poll error: {e}")
 
-# ── WebSocket Tunnel ──────────────────────────────────────────────────────────
-_tunnel_ws = None
+# ── WebSocket Tunnel (Premium only) ───────────────────────────────────────────
+_tunnel_running = False
 _tunnel_thread = None
 
 def _tunnel_run():
-    global _tunnel_ws
-    import socket
-    while True:
+    global _tunnel_running
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(('127.0.0.1', 19999))
+    except Exception:
+        log.error("Failed to bind local proxy on 127.0.0.1:19999")
+        return
+    server.listen(50)
+    server.settimeout(1)
+    _tunnel_running = True
+    log.info("Local proxy listening on 127.0.0.1:19999")
+
+    while _tunnel_running:
         try:
-            _tunnel_ws = websocket.create_connection(TUNNEL_URL)
-            log.info("Tunnel connected")
-            while True:
-                data = _tunnel_ws.recv()
-                # Data from server — not used in this direction for proxy
+            client, addr = server.accept()
+            threading.Thread(target=_handle_tunnel_client, args=(client,), daemon=True).start()
+        except socket.timeout:
+            continue
         except Exception as e:
-            log.debug(f"Tunnel error: {e}")
-            time.sleep(3)
+            if _tunnel_running:
+                log.debug(f"Accept error: {e}")
+    server.close()
+
+def _handle_tunnel_client(client):
+    ws = None
+    try:
+        ws = websocket.create_connection(TUNNEL_URL, timeout=10)
+        def forward(src, dst, is_ws=False):
+            try:
+                while True:
+                    if is_ws:
+                        data = src.recv()
+                    else:
+                        data = src.recv(4096)
+                    if not data:
+                        break
+                    if is_ws:
+                        dst.send(data)
+                    else:
+                        dst.sendall(data)
+            except:
+                pass
+        t1 = threading.Thread(target=forward, args=(client, ws, False), daemon=True)
+        t2 = threading.Thread(target=forward, args=(ws, client, True), daemon=True)
+        t1.start()
+        t2.start()
+        t1.join(timeout=60)
+        t2.join(timeout=60)
+    except Exception as e:
+        log.debug(f"Tunnel handler error: {e}")
+    finally:
+        try: client.close()
+        except: pass
+        try: ws.close()
+        except: pass
 
 def start_tunnel():
     global _tunnel_thread
@@ -400,16 +466,12 @@ def start_tunnel():
         return
     _tunnel_thread = threading.Thread(target=_tunnel_run, daemon=True)
     _tunnel_thread.start()
+    time.sleep(0.5)
     log.info("Tunnel started")
 
 def stop_tunnel():
-    global _tunnel_ws
-    try:
-        if _tunnel_ws:
-            _tunnel_ws.close()
-    except:
-        pass
-    _tunnel_ws = None
+    global _tunnel_running
+    _tunnel_running = False
     log.info("Tunnel stopped")
 
 # ── API ────────────────────────────────────────────────────────────────────────
@@ -423,22 +485,26 @@ class API:
         self._disabler_active  = get_disabler_state()
 
     def startup(self):
+        global USER_TOKEN, USER_PLAN
         threading.Thread(target=self._bg_version_check, daemon=True).start()
-        # Check stored token
         token    = get_stored_token()
         username = self.settings.get("username", "")
         logged_in   = False
         sub_expires = None
         sub_reason  = "no_token"
+        plan        = None
         if token:
+            USER_TOKEN = token
             valid, info = verify_token_sync(token)
             logged_in   = valid
             sub_expires = info.get("sub_expires")
             sub_reason  = info.get("reason", "")
+            plan        = info.get("plan")
+            USER_PLAN   = plan
             if not valid:
                 log.info(f"Token invalid on startup: {sub_reason}")
         return {
-            "proxy_active":    proxy_is_active(),
+            "proxy_active":    proxy_is_active() if PROXY_ADDR else False,
             "version":         VERSION,
             "logo":            logo_b64(),
             "disabler_active": self._disabler_active,
@@ -446,22 +512,43 @@ class API:
             "username":        username if logged_in else "",
             "sub_expires":     sub_expires,
             "sub_reason":      sub_reason,
+            "plan":            plan,
         }
 
     def do_login(self, username: str, password: str):
+        global USER_TOKEN, USER_PLAN
         data, code = auth_request("/auth/login", {"username": username, "password": password})
         if "token" in data:
+            USER_TOKEN = data["token"]
             save_token(data["token"], data.get("username", username))
+            plan = data.get("plan")
+            USER_PLAN = plan
+            if plan == "home":
+                global PROXY_IP, PROXY_PORT, PROXY_ADDR
+                PROXY_IP   = "static.unblockr.org"
+                PROXY_PORT = 8888
+                PROXY_ADDR = f"{PROXY_IP}:{PROXY_PORT}"
+            elif plan == "premium":
+                global TUNNEL_URL, LOCAL_PROXY
+                TUNNEL_URL  = "wss://tunnel.unblockr.org"
+                LOCAL_PROXY = "127.0.0.1:19999"
+                PROXY_ADDR  = LOCAL_PROXY
+                PROXY_IP    = "127.0.0.1"
+                PROXY_PORT  = 19999
             return {"success": True, "username": data.get("username", username),
-                    "sub_expires": data.get("sub_expires")}
+                    "sub_expires": data.get("sub_expires"), "plan": plan}
         return {"success": False, "error": data.get("error", "Login failed")}
 
     def do_signup(self, username: str, password: str):
+        global USER_TOKEN, USER_PLAN
         data, code = auth_request("/auth/signup", {"username": username, "password": password})
         if "token" in data:
+            USER_TOKEN = data["token"]
             save_token(data["token"], data.get("username", username))
+            plan = data.get("plan")
+            USER_PLAN = plan
             return {"success": True, "username": data.get("username", username),
-                    "sub_expires": data.get("sub_expires")}
+                    "sub_expires": data.get("sub_expires"), "plan": plan}
         return {"success": False, "error": data.get("error", "Signup failed")}
 
     def do_logout(self):
@@ -469,6 +556,8 @@ class API:
         return {"success": True}
 
     def activate_disabler(self):
+        if not USER_PLAN:
+            return {"started": False, "error": "no_plan"}
         log.info("activate_disabler called from JS")
         self._disabler_running = True
         def _run():
@@ -476,7 +565,6 @@ class API:
                 run_disabler()
             finally:
                 self._disabler_running = False
-                self._disabler_active = get_disabler_state()
         threading.Thread(target=_run, daemon=True).start()
         return {"started": True}
 
@@ -488,7 +576,6 @@ class API:
                 run_restorer()
             finally:
                 self._disabler_running = False
-                self._disabler_active = get_disabler_state()
         threading.Thread(target=_run, daemon=True).start()
         return {"started": True}
 
@@ -509,10 +596,11 @@ class API:
         if proxy_is_active():
             disable_proxy()
             return {"proxy_active": False, "online": None, "stats": {}, "error": None}
-        # Verify subscription before connecting
         token = get_stored_token()
         if not token:
             return {"proxy_active": False, "online": False, "stats": {}, "error": "not_logged_in"}
+        if not USER_PLAN:
+            return {"proxy_active": False, "online": False, "stats": {}, "error": "no_plan"}
         valid, info = verify_token_sync(token)
         if not valid:
             reason = info.get("reason", "invalid_token")
@@ -600,6 +688,8 @@ HTML = r"""<!DOCTYPE html>
     --off-dim:  rgba(229,80,80,0.12);
     --accent:   #3d9eff;
     --accent-d: rgba(61,158,255,0.1);
+    --gold:     #e5a000;
+    --gold-dim: rgba(229,160,0,0.1);
     --mono:     'DM Mono', monospace;
     --display:  'Syne', sans-serif;
   }
@@ -611,7 +701,6 @@ HTML = r"""<!DOCTYPE html>
     pointer-events:none; z-index:999; opacity:0.35;
   }
 
-  /* loader */
   #loader { position:fixed; inset:0; background:var(--bg); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:998; transition:opacity 0.5s ease, transform 0.5s ease; }
   #loader.fade-out { opacity:0; transform:scale(1.02); pointer-events:none; }
   .loader-logo { width:68px; height:68px; object-fit:contain; margin-bottom:18px; animation:float 3s ease-in-out infinite; }
@@ -623,7 +712,6 @@ HTML = r"""<!DOCTYPE html>
   .progress-fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--on)); border-radius:2px; width:0%; transition:width 0.4s cubic-bezier(0.4,0,0.2,1); }
   .loader-status { font-size:11px; color:var(--muted); letter-spacing:0.06em; }
 
-  /* auth screen */
   #auth-screen { position:fixed; inset:0; background:var(--bg); display:none; align-items:center; justify-content:center; z-index:900; }
   #auth-screen.visible { display:flex; }
   .auth-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:40px; width:360px; text-align:center; position:relative; }
@@ -644,7 +732,6 @@ HTML = r"""<!DOCTYPE html>
   .auth-btn:disabled { opacity:0.4; pointer-events:none; }
   .auth-error { font-size:11px; color:var(--off); margin-top:10px; min-height:16px; }
 
-  /* error overlay */
   #error-overlay { position:fixed; inset:0; background:rgba(7,10,15,0.92); display:none; flex-direction:column; align-items:center; justify-content:center; z-index:500; backdrop-filter:blur(4px); }
   #error-overlay.visible { display:flex; }
   .error-icon { font-size:34px; margin-bottom:14px; color:var(--off); }
@@ -656,11 +743,9 @@ HTML = r"""<!DOCTYPE html>
   .dismiss-btn { padding:10px 18px; background:transparent; border:1px solid var(--border2); border-radius:8px; color:var(--muted); font-family:var(--mono); font-size:12px; cursor:pointer; transition:all 0.2s; }
   .dismiss-btn:hover { color:var(--text); border-color:var(--text); }
 
-  /* app */
   #app { display:flex; flex-direction:column; height:100vh; opacity:0; transition:opacity 0.4s ease; }
   #app.visible { opacity:1; }
 
-  /* titlebar */
   .titlebar { height:50px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 18px 0 16px; -webkit-app-region:drag; flex-shrink:0; }
   .titlebar-left { display:flex; align-items:center; gap:10px; -webkit-app-region:no-drag; }
   .titlebar-left img { width:26px; height:26px; object-fit:contain; }
@@ -672,6 +757,10 @@ HTML = r"""<!DOCTYPE html>
   .dot.on  { background:var(--on); animation:blink 2.5s infinite; }
   .dot.off { background:var(--off); }
   @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .plan-pill { padding:4px 10px; border-radius:100px; font-size:10px; font-weight:600; letter-spacing:0.06em; }
+  .plan-pill.premium { background:var(--accent-d); border:1px solid rgba(61,158,255,0.35); color:var(--accent); }
+  .plan-pill.home { background:var(--on-dim); border:1px solid rgba(0,229,160,0.25); color:var(--on); }
+  .plan-pill.none { background:var(--raised); border:1px solid var(--border); color:var(--muted); }
   .user-pill { display:flex; align-items:center; gap:8px; padding:4px 10px; background:var(--raised); border:1px solid var(--border); border-radius:100px; font-size:11px; color:var(--muted); }
   .user-pill .uname { color:var(--accent); }
   .logout-btn { padding:2px 8px; background:transparent; border:1px solid var(--border); border-radius:5px; color:var(--muted); font-family:var(--mono); font-size:10px; cursor:pointer; transition:all 0.15s; }
@@ -679,7 +768,6 @@ HTML = r"""<!DOCTYPE html>
   .close-btn { width:26px; height:26px; background:transparent; border:1px solid var(--border); border-radius:6px; color:var(--muted); font-size:14px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
   .close-btn:hover { background:var(--off-dim); border-color:var(--off); color:var(--off); }
 
-  /* layout */
   .body { flex:1; display:flex; overflow:hidden; }
   .sidebar { width:190px; background:var(--surface); border-right:1px solid var(--border); padding:20px 0; flex-shrink:0; display:flex; flex-direction:column; gap:2px; }
   .nav-item { display:flex; align-items:center; gap:10px; padding:10px 18px; font-size:12px; color:var(--muted); cursor:pointer; border-left:2px solid transparent; transition:all 0.15s; letter-spacing:0.04em; position:relative; }
@@ -688,7 +776,6 @@ HTML = r"""<!DOCTYPE html>
   .nav-icon { font-size:13px; width:16px; text-align:center; }
   .nav-badge { position:absolute; right:14px; top:50%; transform:translateY(-50%); padding:2px 6px; border-radius:100px; font-size:9px; font-weight:600; letter-spacing:0.04em; }
   .nav-badge.new { background:rgba(61,158,255,0.18); border:1px solid rgba(61,158,255,0.35); color:var(--accent); }
-  .nav-badge.ok  { background:rgba(0,229,160,0.1); border:1px solid rgba(0,229,160,0.2); color:var(--on); }
   .sidebar-bottom { margin-top:auto; padding:14px 18px; border-top:1px solid var(--border); }
   .version-tag { font-size:10px; color:var(--muted); letter-spacing:0.08em; }
   .sub-expiry { font-size:10px; margin-top:5px; }
@@ -704,12 +791,12 @@ HTML = r"""<!DOCTYPE html>
   .page.active { display:block; }
   @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
 
-  /* dashboard */
   .main-grid { display:grid; grid-template-columns:1fr 240px; gap:18px; align-items:start; }
   .disabler-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px 28px; margin-bottom:18px; position:relative; overflow:hidden; grid-column:1/-1; }
   .disabler-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),transparent); }
   .disabler-card.active::before { background:linear-gradient(90deg,var(--on),transparent); }
   .disabler-card.active { border-color:rgba(0,229,160,0.2); }
+  .disabler-card.locked { opacity:0.5; }
   .disabler-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
   .disabler-title { font-family:var(--display); font-size:15px; font-weight:700; color:var(--text); }
   .disabler-badge { display:inline-flex; align-items:center; gap:5px; padding:2px 10px; border-radius:100px; font-size:8px; font-weight:500; }
@@ -730,13 +817,14 @@ HTML = r"""<!DOCTYPE html>
   .dis-track { height:2px; background:var(--border); border-radius:2px; overflow:hidden; }
   .dis-fill { height:100%; background:linear-gradient(90deg,var(--accent),var(--on)); border-radius:2px; width:0%; transition:width 0.35s cubic-bezier(0.4,0,0.2,1); }
   .dis-error { font-size:11px; color:var(--off); margin-top:8px; display:none; }
-  .toggle-lock-overlay { position:absolute; inset:0; z-index:10; border-radius:14px; cursor:pointer; display:none; }
+  .no-plan-overlay { position:absolute; inset:0; background:rgba(7,10,15,0.6); display:flex; align-items:center; justify-content:center; z-index:10; border-radius:14px; }
+  .no-plan-overlay span { font-size:12px; color:var(--muted); letter-spacing:0.06em; }
+  
   .toggle-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px 24px 22px; position:relative; overflow:hidden; transition:border-color 0.3s; }
   .toggle-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),transparent); transition:background 0.4s; }
   .toggle-card.on::before { background:linear-gradient(90deg,var(--on),transparent); }
   .toggle-card.on { border-color:rgba(0,229,160,0.2); }
   .toggle-card.locked { opacity:0.5; }
-  .toggle-card.locked .toggle-lock-overlay { display:block; }
   .status-label { font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:10px; }
   .status-value { font-family:var(--display); font-size:22px; font-weight:800; line-height:1; margin-bottom:4px; transition:color 0.3s; }
   .status-value.on  { color:var(--on); }
@@ -750,6 +838,7 @@ HTML = r"""<!DOCTYPE html>
   .toggle-btn.deactivate:hover { box-shadow:0 8px 24px rgba(229,80,80,0.15); }
   .toggle-btn.loading { opacity:0.6; pointer-events:none; }
   .btn-dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex-shrink:0; }
+  
   .stats-col { display:flex; flex-direction:column; gap:10px; }
   .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 20px; position:relative; overflow:hidden; }
   .stat-card::after { content:''; position:absolute; top:0; left:0; width:3px; height:100%; }
@@ -761,10 +850,10 @@ HTML = r"""<!DOCTYPE html>
   .stat-card.green .stat-val { color:var(--on); }
   .stat-card.red   .stat-val { color:var(--off); }
   .stat-card.blue  .stat-val { color:var(--accent); }
+  
   .info-strip { margin-top:16px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 18px; display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted); grid-column:1/-1; }
   .info-strip code { background:var(--raised); border:1px solid var(--border); border-radius:4px; padding:1px 7px; color:var(--accent); font-family:var(--mono); font-size:11px; }
 
-  /* updates */
   .updates-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:32px; max-width:500px; }
   .updates-header { display:flex; align-items:center; gap:14px; margin-bottom:24px; }
   .updates-logo { width:44px; height:44px; object-fit:contain; }
@@ -784,7 +873,6 @@ HTML = r"""<!DOCTYPE html>
   .spinner { width:12px; height:12px; border:2px solid rgba(61,158,255,0.3); border-top-color:var(--accent); border-radius:50%; animation:spin 0.7s linear infinite; }
   @keyframes spin { to{transform:rotate(360deg)} }
 
-  /* about */
   .about-card { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:32px; max-width:520px; }
   .about-header { display:flex; align-items:center; gap:16px; margin-bottom:6px; }
   .about-logo { width:48px; height:48px; object-fit:contain; }
@@ -798,7 +886,9 @@ HTML = r"""<!DOCTYPE html>
   .kv-key { color:var(--muted); }
   .kv-val { color:var(--text); font-family:var(--mono); }
 
-  /* toasts */
+  /* No-plan degraded mode */
+  .degraded { opacity:0.6; filter:grayscale(0.4); }
+  
   .toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--raised); border-radius:10px; padding:11px 20px; display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text); box-shadow:0 8px 32px rgba(0,0,0,0.4); opacity:0; pointer-events:none; transition:opacity 0.25s ease, transform 0.25s ease; z-index:600; white-space:nowrap; }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   .toast.warning { border:1px solid rgba(229,80,80,0.35); }
@@ -809,7 +899,6 @@ HTML = r"""<!DOCTYPE html>
 </head>
 <body>
 
-<!-- Auth screen -->
 <div id="auth-screen">
   <div class="auth-card">
     <button class="auth-close" id="auth-close-btn" onclick="closeAuthScreen()" style="display:none">&#x2715;</button>
@@ -827,7 +916,6 @@ HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<!-- Loader -->
 <div id="loader">
   <img class="loader-logo" id="loader-img" src="" alt="UnblockR">
   <div class="loader-word">Unblock<span class="r">R</span></div>
@@ -836,18 +924,16 @@ HTML = r"""<!DOCTYPE html>
   <div class="loader-status" id="loader-status">Initialising...</div>
 </div>
 
-<!-- Error overlay -->
 <div id="error-overlay">
   <div class="error-icon">&#x26A0;</div>
   <div class="error-title">Server Unreachable</div>
-  <div class="error-sub">Could not connect to UnblockR.<br><br>The server may be offline or you may not be on the correct network. UnblockR has not been activated.</div>
+  <div class="error-sub">Could not connect to UnblockR.<br><br>The server may be offline or you may not be on the correct network.</div>
   <div class="error-actions">
     <button class="retry-btn" onclick="retryToggle()">&#x21BA;&nbsp; Retry</button>
     <button class="dismiss-btn" onclick="dismissError()">Dismiss</button>
   </div>
 </div>
 
-<!-- App -->
 <div id="app">
   <div class="titlebar">
     <div class="titlebar-left">
@@ -857,8 +943,9 @@ HTML = r"""<!DOCTYPE html>
     <div class="titlebar-right">
       <div class="server-pill">
         <div class="dot" id="server-dot"></div>
-        <span>UnblockR Status</span>
+        <span id="server-label">UnblockR Status</span>
       </div>
+      <span class="plan-pill none" id="plan-pill">No Plan</span>
       <div class="user-pill" id="user-pill" style="display:none">
         <span class="uname" id="user-pill-name"></span>
         <button class="logout-btn" onclick="doLogout()">Logout</button>
@@ -868,7 +955,7 @@ HTML = r"""<!DOCTYPE html>
   </div>
 
   <div class="body">
-    <div class="sidebar">
+    <div class="sidebar" id="sidebar">
       <div class="nav-item active" data-page="main"><span class="nav-icon">&#x2B21;</span> Dashboard</div>
       <div class="nav-item" data-page="updates">
         <span class="nav-icon">&#x2191;</span> Updates
@@ -882,12 +969,10 @@ HTML = r"""<!DOCTYPE html>
     </div>
 
     <div class="content">
-
-      <!-- Dashboard -->
       <div class="page active" id="page-main">
         <div class="main-grid">
-
           <div class="disabler-card" id="disabler-card">
+            <div class="no-plan-overlay" id="no-plan-overlay" style="display:none"><span>Subscribe to a plan to access this feature</span></div>
             <div class="disabler-header">
               <div class="disabler-title">Linewize Disabler</div>
               <span class="disabler-badge off" id="dis-badge">&#x25CF; Inactive</span>
@@ -898,48 +983,21 @@ HTML = r"""<!DOCTYPE html>
               <button class="dis-btn restore" id="dis-restore-btn" onclick="restoreDisabler()" style="display:none">Restore Extensions</button>
             </div>
             <div class="dis-progress" id="dis-progress">
-              <div class="dis-prog-row">
-                <span id="dis-msg">Starting...</span>
-                <span class="dis-prog-pct" id="dis-pct">0%</span>
-              </div>
+              <div class="dis-prog-row"><span id="dis-msg">Starting...</span><span class="dis-prog-pct" id="dis-pct">0%</span></div>
               <div class="dis-track"><div class="dis-fill" id="dis-fill"></div></div>
             </div>
             <div class="dis-error" id="dis-error"></div>
           </div>
 
-<div class="toggle-card locked" id="toggle-card">
-  <div class="toggle-lock-overlay" onclick="onLockClick()"></div>
-
-  <div class="status-label">Active Unblocker</div>
-  <div class="status-value off" id="status-val">INACTIVE</div>
-  <div class="status-desc" id="status-desc">
-    Removes the annoying 'domain has been blocked'.
-  </div>
-
-  <button
-    class="toggle-btn activate disabled-btn"
-    id="toggle-btn"
-    onclick="toggleProxy()"
-    disabled
-  >
-    <span class="btn-dot"></span>
-    <span id="toggle-label">Activate UnblockR</span>
-  </button>
-</div>
-
-<style>
-.disabled-btn {
-  background: #666 !important;
-  color: #bdbdbd !important;
-  cursor: not-allowed;
-  opacity: 0.6;
-  pointer-events: none;
-}
-
-.disabled-btn .btn-dot {
-  background: #999 !important;
-}
-</style>
+          <div class="toggle-card locked" id="toggle-card">
+            <div class="status-label">Active Unblocker</div>
+            <div class="status-value off" id="status-val">INACTIVE</div>
+            <div class="status-desc" id="status-desc">Removes the annoying 'domain has been blocked'.</div>
+            <button class="toggle-btn activate" id="toggle-btn" onclick="toggleProxy()" disabled>
+              <span class="btn-dot"></span>
+              <span id="toggle-label">Activate UnblockR</span>
+            </button>
+          </div>
 
           <div class="stats-col">
             <div class="stat-card green"><div class="stat-label">Allowed</div><div class="stat-val" id="stat-allowed">—</div></div>
@@ -949,14 +1007,13 @@ HTML = r"""<!DOCTYPE html>
 
           <div class="info-strip">
             <span>&#x2B21;</span>
-            <span>Connect to <code>UnblockR</code></span>
-            &nbsp;·&nbsp;
+            <span>Connect to <code id="info-proxy-addr">UnblockR</code></span>
+            &nbsp;&middot;&nbsp;
             <span>Covers all WinINet apps (Chrome, Edge, Discord, Steam)</span>
           </div>
         </div>
       </div>
 
-      <!-- Updates -->
       <div class="page" id="page-updates">
         <div class="updates-card">
           <div class="updates-header">
@@ -978,7 +1035,6 @@ HTML = r"""<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- About -->
       <div class="page" id="page-about">
         <div class="about-card">
           <div class="about-header">
@@ -988,18 +1044,17 @@ HTML = r"""<!DOCTYPE html>
           <div class="about-ver">Version <span id="about-ver">—</span></div>
           <div class="about-body">UnblockR unblocks all appropriate content like AI and games, but blocks adult content, gambling, malware, and other inappropriate sites across all apps on your device.</div>
           <div class="divider"></div>
-          <div class="kv-row"><span class="kv-key">Server</span><span class="kv-val">UnblockR</span></div>
+          <div class="kv-row"><span class="kv-key">Edition</span><span class="kv-val" id="about-plan">—</span></div>
+          <div class="kv-row"><span class="kv-key">Server</span><span class="kv-val" id="about-server">UnblockR</span></div>
           <div class="kv-row"><span class="kv-key">Coverage</span><span class="kv-val">HTTP + HTTPS (domain level)</span></div>
-          <div class="kv-row"><span class="kv-key">Safe search</span><span class="kv-val">Google · Bing · YouTube · DDG · Yahoo</span></div>
+          <div class="kv-row"><span class="kv-key">Safe search</span><span class="kv-val">Google &middot; Bing &middot; YouTube &middot; DDG &middot; Yahoo</span></div>
           <div class="kv-row"><span class="kv-key">Built by</span><span class="kv-val">396abc</span></div>
         </div>
       </div>
-
     </div>
   </div>
 </div>
 
-<!-- Toasts -->
 <div class="toast warning" id="toast-warning">
   <span class="toast-icon warn">&#x26A0;</span>
   <span id="toast-warning-msg">Cannot close right now.</span>
@@ -1012,13 +1067,13 @@ HTML = r"""<!DOCTYPE html>
 <script>
   let proxyActive  = false;
   let appVersion   = '—';
+  let userPlan     = null;
   let updateAvail  = false;
   let statsInterval = null;
   let _toastWarnTimer = null;
   let _toastInfoTimer = null;
   let _authMode = 'login';
 
-  // ── Logo ───────────────────────────────────────────────────────────────────
   function applyLogo(src) {
     if (!src) return;
     ['loader-img','title-img','about-img','updates-img','auth-logo'].forEach(id => {
@@ -1027,7 +1082,6 @@ HTML = r"""<!DOCTYPE html>
     });
   }
 
-  // ── Loader ─────────────────────────────────────────────────────────────────
   function setProgress(pct, msg) {
     document.getElementById('prog').style.width = pct + '%';
     document.getElementById('loader-status').textContent = msg;
@@ -1049,7 +1103,51 @@ HTML = r"""<!DOCTYPE html>
     }, 500);
   }
 
-  // ── Auth ───────────────────────────────────────────────────────────────────
+  function applyPlanUI(plan) {
+    userPlan = plan;
+    const pill = document.getElementById('plan-pill');
+    const title = document.querySelector('.titlebar-word');
+    const aboutPlan = document.getElementById('about-plan');
+    const noPlanOverlay = document.getElementById('no-plan-overlay');
+    const disCard = document.getElementById('disabler-card');
+    const toggleCard = document.getElementById('toggle-card');
+    const infoAddr = document.getElementById('info-proxy-addr');
+    const serverLabel = document.getElementById('server-label');
+    
+    pill.className = 'plan-pill ' + (plan === 'premium' ? 'premium' : plan === 'home' ? 'home' : 'none');
+    
+    if (plan === 'premium') {
+      pill.textContent = 'PREMIUM';
+      if (title) title.innerHTML = 'Unblock<span class="r">R</span> Premium';
+      if (aboutPlan) aboutPlan.textContent = 'Premium — Works Anywhere';
+      if (noPlanOverlay) noPlanOverlay.style.display = 'none';
+      if (disCard) disCard.classList.remove('locked');
+      if (toggleCard) toggleCard.classList.remove('locked');
+      if (infoAddr) infoAddr.textContent = 'Premium (automatic)';
+      if (serverLabel) serverLabel.textContent = 'Premium Network';
+    } else if (plan === 'home') {
+      pill.textContent = 'HOME';
+      if (title) title.innerHTML = 'Unblock<span class="r">R</span> HOME';
+      if (aboutPlan) aboutPlan.textContent = 'HOME Edition — Local Network Only';
+      if (noPlanOverlay) noPlanOverlay.style.display = 'none';
+      if (disCard) disCard.classList.remove('locked');
+      if (toggleCard) toggleCard.classList.remove('locked');
+      if (infoAddr) infoAddr.textContent = 'static.unblockr.org:8888';
+      if (serverLabel) serverLabel.textContent = 'HOME Network';
+    } else {
+      pill.textContent = 'No Plan';
+      if (title) title.innerHTML = 'Unblock<span class="r">R</span>';
+      if (aboutPlan) aboutPlan.textContent = 'None — Subscribe to activate';
+      if (noPlanOverlay) noPlanOverlay.style.display = 'flex';
+      if (disCard) disCard.classList.add('locked');
+      if (toggleCard) toggleCard.classList.add('locked');
+      if (infoAddr) infoAddr.textContent = 'No plan active';
+      if (serverLabel) serverLabel.textContent = 'UnblockR Status';
+      document.getElementById('dis-activate-btn').disabled = true;
+      document.getElementById('toggle-btn').disabled = true;
+    }
+  }
+
   function switchTab(mode) {
     _authMode = mode;
     document.getElementById('tab-login').classList.toggle('active', mode === 'login');
@@ -1072,23 +1170,24 @@ HTML = r"""<!DOCTYPE html>
         ? await pywebview.api.do_login(user, pass)
         : await pywebview.api.do_signup(user, pass);
       if (result.success) {
+        applyPlanUI(result.plan);
         applyUserState(result.username, result.sub_expires);
         document.getElementById('auth-screen').classList.remove('visible');
         document.getElementById('app').classList.add('visible');
       } else {
         const msgs = {
-          invalid_credentials:  'Incorrect username or password.',
-          username_taken:       'Username already taken.',
-          no_subscription:      'Account created — contact admin to activate subscription.',
+          invalid_credentials: 'Incorrect username or password.',
+          username_taken: 'Username already taken.',
+          no_subscription: 'Account created — contact admin to activate subscription.',
           subscription_expired: 'Your subscription has expired. Contact admin.',
-          account_disabled:     'This account has been disabled.',
+          account_disabled: 'This account has been disabled.',
         };
         err.textContent = msgs[result.error] || result.error || 'Something went wrong.';
         btn.disabled = false;
         btn.textContent = _authMode === 'login' ? 'Sign In' : 'Create Account';
       }
     } catch(e) {
-      err.textContent = 'Could not reach server. Are you on the school network?';
+      err.textContent = 'Could not reach server.';
       btn.disabled = false;
       btn.textContent = _authMode === 'login' ? 'Sign In' : 'Create Account';
     }
@@ -1102,7 +1201,6 @@ HTML = r"""<!DOCTYPE html>
 
   function applyUserState(username, subExpires) {
     const pill = document.getElementById('user-pill');
-    const subEl = document.getElementById('sub-expiry');
     if (username) {
       pill.style.display = '';
       document.getElementById('user-pill-name').textContent = username;
@@ -1121,7 +1219,7 @@ HTML = r"""<!DOCTYPE html>
     }
     const exp = new Date(subExpires);
     const now = new Date();
-    const ok  = exp > now;
+    const ok = exp > now;
     subEl.className = 'sub-expiry ' + (ok ? 'ok' : 'exp');
     const dateStr = exp.toLocaleDateString() + ' ' + exp.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
     subEl.textContent = ok ? 'Sub until: ' + dateStr : 'Expired: ' + dateStr;
@@ -1134,14 +1232,13 @@ HTML = r"""<!DOCTYPE html>
     }
     await pywebview.api.do_logout();
     applyUserState('', null);
-    // Reset auth form fully
+    applyPlanUI(null);
     document.getElementById('auth-username').value = '';
     document.getElementById('auth-password').value = '';
     document.getElementById('auth-error').textContent = '';
     document.getElementById('auth-submit-btn').disabled = false;
     document.getElementById('auth-submit-btn').textContent = 'Sign In';
     switchTab('login');
-    // Show close button since app was already open
     document.getElementById('auth-close-btn').style.display = 'flex';
     document.getElementById('app').classList.remove('visible');
     document.getElementById('auth-screen').classList.add('visible');
@@ -1152,16 +1249,22 @@ HTML = r"""<!DOCTYPE html>
     document.getElementById('app').classList.add('visible');
   }
 
-  // ── Subscription update from background poll ───────────────────────────────
   window._onSubUpdate = function(info) {
     updateSubExpiry(info.sub_expires);
+    const plan = info.plan;
+    if (plan !== userPlan) {
+      applyPlanUI(plan);
+      if (!plan && document.getElementById('disabler-card').classList.contains('active')) {
+        showWarningToast('Plan removed — restoring extensions...');
+        pywebview.api.restore_disabler();
+      }
+    }
     const btn   = document.getElementById('toggle-btn');
     const label = document.getElementById('toggle-label');
     const card  = document.getElementById('toggle-card');
     const disActive = document.getElementById('disabler-card').classList.contains('active');
-
+    
     if (!info.valid && !proxyActive) {
-      // Sub expired/removed — make button unavailable and red
       btn.className   = 'toggle-btn deactivate';
       btn.disabled    = true;
       btn.style.borderColor = 'rgba(229,80,80,0.4)';
@@ -1170,16 +1273,13 @@ HTML = r"""<!DOCTYPE html>
       btn.style.opacity     = '0.7';
       label.textContent = 'Unavailable';
       card.classList.add('locked');
-
       const msgs = {
         subscription_expired: 'Your subscription has expired.',
-        no_subscription:      'No active subscription.',
-        account_disabled:     'Your account has been disabled.',
+        no_subscription: 'No active subscription.',
+        account_disabled: 'Your account has been disabled.',
       };
-      showWarningToast(msgs[info.reason] || 'Subscription issue — contact admin.');
-
-    } else if (info.valid && !proxyActive) {
-      // Sub restored — reset button to default activate state
+      showWarningToast(msgs[info.reason] || 'Subscription issue.');
+    } else if (info.valid && !proxyActive && plan) {
       btn.style.borderColor = '';
       btn.style.background  = '';
       btn.style.color       = '';
@@ -1203,11 +1303,14 @@ HTML = r"""<!DOCTYPE html>
     showWarningToast('Proxy deactivated — subscription expired.');
   };
 
-  // ── Boot ───────────────────────────────────────────────────────────────────
+  window._onPlanChange = function(plan) {
+    applyPlanUI(plan);
+  };
+
   async function boot() {
     setProgress(30, 'Loading...');
     await sleep(200);
-    setProgress(70, 'Reading settings...');
+    setProgress(70, 'Checking subscription...');
     let result;
     try { result = await pywebview.api.startup(); }
     catch(e) { setProgress(100,'Ready.'); await sleep(200); showApp(); return; }
@@ -1215,15 +1318,25 @@ HTML = r"""<!DOCTYPE html>
     applyLogo(result.logo);
     appVersion  = result.version;
     proxyActive = result.proxy_active;
+    userPlan    = result.plan;
 
     document.getElementById('ver-tag').textContent   = appVersion;
     document.getElementById('about-ver').textContent = appVersion;
     document.getElementById('upd-local').textContent = appVersion;
 
+    applyPlanUI(userPlan);
+    
+    // If disabler was active but user has no plan, auto-restore
+    if (result.disabler_active && !userPlan) {
+      setProgress(95, 'Plan expired — restoring extensions...');
+      await pywebview.api.restore_disabler();
+      await sleep(1000);
+    }
+
     setProgress(100, 'Ready.');
     await sleep(250);
     applyState({proxy_active:proxyActive, online:proxyActive, stats:{}});
-    applyDisablerState(result.disabler_active === true);
+    applyDisablerState(result.disabler_active === true && userPlan !== null);
 
     if (result.logged_in) {
       applyUserState(result.username, result.sub_expires);
@@ -1233,7 +1346,6 @@ HTML = r"""<!DOCTYPE html>
     }
   }
 
-  // ── Version check callback ─────────────────────────────────────────────────
   function onVersionCheck(remoteVer, avail) {
     updateAvail = avail;
     document.getElementById('upd-remote').textContent = remoteVer;
@@ -1246,7 +1358,7 @@ HTML = r"""<!DOCTYPE html>
     if (avail) {
       badge.textContent = 'NEW'; badge.className = 'nav-badge new'; badge.style.display = '';
       status.className = 'update-status avail';
-      stext.textContent = 'Update available — click below to install';
+      stext.textContent = 'Update available';
     } else {
       badge.style.display = 'none';
       status.className = 'update-status ok';
@@ -1257,7 +1369,6 @@ HTML = r"""<!DOCTYPE html>
     blabel.textContent = 'Open Updater';
   }
 
-  // ── Proxy state ────────────────────────────────────────────────────────────
   function applyState(result) {
     proxyActive = result.proxy_active;
     const stats  = result.stats || {};
@@ -1283,12 +1394,12 @@ HTML = r"""<!DOCTYPE html>
       desc.textContent = "Removes the annoying 'domain has been blocked'.";
       btn.className = 'toggle-btn activate';
       label.textContent = 'Activate UnblockR';
-      btn.disabled = !disActive;
-      if (!disActive) card.classList.add('locked');
+      btn.disabled = !disActive || !userPlan;
+      if (!disActive || !userPlan) card.classList.add('locked');
       else card.classList.remove('locked');
     }
     function fmt(n) {
-      if (!n && n !== 0) return '—';
+      if (!n && n !== 0) return '\u2014';
       if (n >= 1000000) return (n/1000000).toFixed(1)+'M';
       if (n >= 1000)    return (n/1000).toFixed(1)+'K';
       return String(n);
@@ -1298,37 +1409,26 @@ HTML = r"""<!DOCTYPE html>
     document.getElementById('stat-domains').textContent = fmt(stats.domains_in_blocklist);
   }
 
-  // ── Toggle proxy ───────────────────────────────────────────────────────────
-  function onLockClick() {
-    const subEl = document.getElementById('sub-expiry');
-    const subInvalid = subEl.classList.contains('exp') || subEl.classList.contains('none');
-    if (subInvalid) {
-      showWarningToast('No active subscription — contact admin.');
-    } else {
-      showWarningToast('Enable Linewize Disabler before connecting');
-    }
-  }
-
   async function toggleProxy() {
     const btn   = document.getElementById('toggle-btn');
     const label = document.getElementById('toggle-label');
     const disActive = document.getElementById('disabler-card').classList.contains('active');
-
+    if (!userPlan) {
+      showWarningToast('Subscribe to a plan to use the proxy.');
+      return;
+    }
     if (!proxyActive) {
-      // Check subscription first
       const subEl = document.getElementById('sub-expiry');
       const subInvalid = subEl.classList.contains('exp') || subEl.classList.contains('none');
       if (subInvalid) {
-        showWarningToast('No active subscription — contact admin.');
+        showWarningToast('No active subscription.');
         return;
       }
-      // Only show disabler warning if subscription is valid
       if (!disActive) {
         showWarningToast('Enable Linewize Disabler before connecting');
         return;
       }
     }
-
     btn.classList.add('loading');
     label.textContent = proxyActive ? 'Deactivating...' : 'Connecting...';
     try {
@@ -1337,10 +1437,10 @@ HTML = r"""<!DOCTYPE html>
         showError();
       } else if (result.error === 'not_logged_in' || result.error === 'token_not_found') {
         doLogout();
+      } else if (result.error === 'no_plan') {
+        showWarningToast('Subscribe to a plan to use the proxy.');
       } else if (result.error === 'subscription_expired' || result.error === 'no_subscription') {
-        showWarningToast('Your subscription has expired or is inactive — contact admin.');
-      } else if (result.error === 'account_disabled') {
-        showWarningToast('Your account has been disabled — contact admin.');
+        showWarningToast('Your subscription has expired.');
       } else {
         applyState(result);
         if (result.proxy_active) startStatsPoll();
@@ -1348,12 +1448,10 @@ HTML = r"""<!DOCTYPE html>
       }
     } catch(e) {
       label.textContent = 'Error';
-      setTimeout(() => applyState({proxy_active:proxyActive,online:false,stats:{}}), 1500);
     }
     btn.classList.remove('loading');
   }
 
-  // ── Error overlay ──────────────────────────────────────────────────────────
   function showError() { document.getElementById('error-overlay').classList.add('visible'); }
   function dismissError() { document.getElementById('error-overlay').classList.remove('visible'); }
   async function retryToggle() {
@@ -1370,7 +1468,6 @@ HTML = r"""<!DOCTYPE html>
     } catch(e) { btn.textContent = 'Failed — Retry'; btn.style.pointerEvents = ''; }
   }
 
-  // ── Stats poll ─────────────────────────────────────────────────────────────
   function startStatsPoll() {
     stopStatsPoll();
     statsInterval = setInterval(async () => {
@@ -1379,7 +1476,6 @@ HTML = r"""<!DOCTYPE html>
   }
   function stopStatsPoll() { if (statsInterval) { clearInterval(statsInterval); statsInterval = null; } }
 
-  // ── Updater ────────────────────────────────────────────────────────────────
   async function openUpdater() {
     const btn = document.getElementById('upd-btn');
     btn.disabled = true;
@@ -1388,7 +1484,6 @@ HTML = r"""<!DOCTYPE html>
     setTimeout(() => { btn.disabled = false; document.getElementById('upd-btn-label').textContent = 'Open Updater'; }, 2000);
   }
 
-  // ── Disabler ───────────────────────────────────────────────────────────────
   function applyDisablerState(active) {
     const card        = document.getElementById('disabler-card');
     const badge       = document.getElementById('dis-badge');
@@ -1396,25 +1491,40 @@ HTML = r"""<!DOCTYPE html>
     const restoreBtn  = document.getElementById('dis-restore-btn');
     const toggleCard  = document.getElementById('toggle-card');
     const toggleBtn   = document.getElementById('toggle-btn');
+    if (!userPlan) {
+      activateBtn.disabled = true;
+      toggleBtn.disabled = true;
+      toggleCard.classList.add('locked');
+    }
     if (active) {
       card.className  = 'disabler-card active';
       badge.className = 'disabler-badge on'; badge.innerHTML = '&#x25CF; Active';
       activateBtn.style.display = 'none'; restoreBtn.style.display = '';
-      toggleBtn.disabled = false; toggleCard.classList.remove('locked');
+      if (userPlan) { toggleBtn.disabled = false; toggleCard.classList.remove('locked'); }
     } else {
       card.className  = 'disabler-card';
       badge.className = 'disabler-badge off'; badge.innerHTML = '&#x25CF; Inactive';
       activateBtn.style.display = ''; restoreBtn.style.display = 'none';
-      toggleBtn.disabled = true; toggleCard.classList.add('locked');
+      if (userPlan) toggleBtn.disabled = true;
+      if (userPlan) toggleCard.classList.add('locked');
     }
   }
 
   async function activateDisabler() {
+    if (!userPlan) {
+      showWarningToast('Subscribe to a plan first.');
+      return;
+    }
     const btn = document.getElementById('dis-activate-btn');
     btn.disabled = true; btn.textContent = 'Working...';
     document.getElementById('dis-progress').classList.add('visible');
     document.getElementById('dis-error').style.display = 'none';
-    await pywebview.api.activate_disabler();
+    const result = await pywebview.api.activate_disabler();
+    if (result.error === 'no_plan') {
+      showWarningToast('Subscribe to a plan first.');
+      document.getElementById('dis-progress').classList.remove('visible');
+      btn.disabled = false; btn.textContent = 'Activate';
+    }
   }
 
   async function restoreDisabler() {
@@ -1431,14 +1541,12 @@ HTML = r"""<!DOCTYPE html>
     document.getElementById('dis-pct').textContent  = pct + '%';
     document.getElementById('dis-msg').textContent  = msg;
   };
-
   window._disablerDone = function(isActive) {
     document.getElementById('dis-progress').classList.remove('visible');
     const btn = isActive ? document.getElementById('dis-activate-btn') : document.getElementById('dis-restore-btn');
     if (btn) { btn.disabled = false; btn.textContent = isActive ? 'Activate' : 'Restore Extensions'; }
     applyDisablerState(isActive);
   };
-
   window._disablerError = function(msg) {
     const err = document.getElementById('dis-error');
     err.textContent = 'Error: ' + msg; err.style.display = 'block';
@@ -1449,7 +1557,6 @@ HTML = r"""<!DOCTYPE html>
     document.getElementById('dis-restore-btn').textContent = 'Restore Extensions';
   };
 
-  // ── Toasts ─────────────────────────────────────────────────────────────────
   function showWarningToast(msg) {
     const t = document.getElementById('toast-warning');
     document.getElementById('toast-warning-msg').textContent = msg;
@@ -1457,7 +1564,6 @@ HTML = r"""<!DOCTYPE html>
     if (_toastWarnTimer) clearTimeout(_toastWarnTimer);
     _toastWarnTimer = setTimeout(() => t.classList.remove('show'), 3500);
   }
-
   function showInfoToast(msg) {
     const t = document.getElementById('toast-info');
     document.getElementById('toast-info-msg').textContent = msg;
@@ -1465,10 +1571,8 @@ HTML = r"""<!DOCTYPE html>
     if (_toastInfoTimer) clearTimeout(_toastInfoTimer);
     _toastInfoTimer = setTimeout(() => t.classList.remove('show'), 3000);
   }
-
   window.showClosingToast = function() { showInfoToast('Closing...'); };
 
-  // ── Nav ────────────────────────────────────────────────────────────────────
   document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', () => {
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -1478,7 +1582,6 @@ HTML = r"""<!DOCTYPE html>
     });
   });
 
-  // ── Close ──────────────────────────────────────────────────────────────────
   async function closeApp() {
     if (!window.pywebview) return;
     const result = await pywebview.api.close();
@@ -1515,7 +1618,6 @@ window = webview.create_window(
 
 api._window_ref = window
 
-# Start subscription polling background thread
 threading.Thread(target=poll_subscription, daemon=True).start()
 
 log.info(f"UnblockR v{VERSION} — window ready, starting webview")
