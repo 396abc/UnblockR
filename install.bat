@@ -37,7 +37,7 @@ set "br="
 set "i=0"
 :bl1
 if !i! lss %d% (
-    set "br=!br!="
+    set "br=!br!#"
     set /a "i+=1"
     goto bl1
 )
