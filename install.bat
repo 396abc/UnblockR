@@ -64,9 +64,9 @@ if defined xt echo.
 if defined xt echo  !e![90m!xt!!e![0m
 goto :eof
 
-::run background command with animated dots
+::run background command WITH WAIT
 
-:run
+:run_wait
 set "rp=%~1"
 set "rmsg=%~2"
 set "rcmd=%~3"
@@ -102,10 +102,11 @@ if !elapsed! geq 15 (
 timeout /t 1 /nobreak >nul
 goto runloop
 
-::simple task
+::simple task (no animation, just display)
 
 :t
 call :b %~1 "%~2"
+timeout /t 1 >nul
 goto :eof
 
 ::error
@@ -126,9 +127,8 @@ call :t 5 "Python not found. Installing Python 3.13..."
 echo.
 echo Installing Python 3.13 via winget. This may take a moment...
 
-:: Run winget installation
-winget install -e --id Python.Python.3.13 --accept-source-agreements --silent >nul 2>nul
-set winget_result=!errorlevel!
+:: Run winget installation (not background, wait for completion)
+winget install -e --id Python.Python.3.13 --accept-source-agreements --silent
 
 :: Wait a moment for installation to finalize
 timeout /t 3 /nobreak >nul
@@ -176,7 +176,6 @@ goto :eof
 
 :m
 call :t 0 "Booting up"
-timeout /t 1 >nul
 
 ::python check and auto install
 call :t 3 "Checking for Python"
@@ -188,42 +187,39 @@ if !errorlevel! equ 0 (
     call :install_python_auto
 )
 
-::packages
-:pk
+::packages - each will wait its turn
 set pf=0
 
-call :run 20 "Installing pywebview" "python -c ""import webview"" 2>nul || pip install pywebview --upgrade -q 2>nul || python -m pip install pywebview --upgrade -q 2>nul"
+call :run_wait 20 "Installing pywebview" "python -c ""import webview"" 2>nul || pip install pywebview --upgrade -q 2>nul || python -m pip install pywebview --upgrade -q 2>nul"
 
-call :run 30 "Installing psutil" "python -c ""import psutil"" 2>nul || pip install psutil --upgrade -q 2>nul || python -m pip install psutil --upgrade -q 2>nul"
+call :run_wait 30 "Installing psutil" "python -c ""import psutil"" 2>nul || pip install psutil --upgrade -q 2>nul || python -m pip install psutil --upgrade -q 2>nul"
 
-call :run 40 "Installing websocket-client" "python -c ""import websocket"" 2>nul || pip install websocket-client --upgrade -q 2>nul || python -m pip install websocket-client --upgrade -q 2>nul"
+call :run_wait 40 "Installing websocket-client" "python -c ""import websocket"" 2>nul || pip install websocket-client --upgrade -q 2>nul || python -m pip install websocket-client --upgrade -q 2>nul"
 
 ::downloads
-
-:dl
 if not exist "%id%" mkdir "%id%" >nul 2>nul
 set df=0
 
-call :run 50 "Downloading application core" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')"" >nul 2>nul"
+call :run_wait 50 "Downloading application core" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/main.py', '%id%\main.py')"" >nul 2>nul"
 if not exist "%id%\main.py" set df=1
 
-call :run 57 "Downloading updater" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')"" >nul 2>nul"
+call :run_wait 57 "Downloading updater" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater.py', '%id%\updater.py')"" >nul 2>nul"
 
-call :run 63 "Downloading launchers" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')"" >nul 2>nul"
+call :run_wait 63 "Downloading launchers" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/launcher.vbs', '%id%\launcher.vbs')"" >nul 2>nul"
 if not exist "%id%\launcher.vbs" (
     echo Dim sDir > "%id%\launcher.vbs"
     echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\launcher.vbs"
     echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\main.py" ^& Chr^(34^), 0, False >> "%id%\launcher.vbs"
 )
 
-call :run 70 "Downloading updater launcher" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')"" >nul 2>nul"
+call :run_wait 70 "Downloading updater launcher" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/updater_launcher.vbs', '%id%\updater_launcher.vbs')"" >nul 2>nul"
 if not exist "%id%\updater_launcher.vbs" (
     echo Dim sDir > "%id%\updater_launcher.vbs"
     echo sDir = CreateObject^("Scripting.FileSystemObject"^).GetParentFolderName^(WScript.ScriptFullName^) >> "%id%\updater_launcher.vbs"
     echo CreateObject^("WScript.Shell"^).Run "pythonw " ^& Chr^(34^) ^& sDir ^& "\updater.py" ^& Chr^(34^), 0, False >> "%id%\updater_launcher.vbs"
 )
 
-call :run 78 "Downloading assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')"" >nul 2>nul"
+call :run_wait 78 "Downloading assets" "powershell -NoProfile -Command ""[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%rb%/UnblockR.ico', '%id%\UnblockR.ico'); (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png', '%id%\UnblockR.png')"" >nul 2>nul"
 
 call :t 85 "Writing config"
 if not exist "%id%\settings.json" (
@@ -234,23 +230,29 @@ if %df% equ 1 call :f "Download failed. Check your internet connection."
 
 ::shortcuts
 
-call :run 90 "Creating shortcuts" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
+call :run_wait 90 "Creating shortcuts" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
 if not exist "%sm%\UnblockR" mkdir "%sm%\UnblockR" >nul 2>nul
-call :run 95 "Adding to Start Menu" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
+call :run_wait 95 "Adding to Start Menu" "powershell -NoProfile -Command ""$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\""""%id%\launcher.vbs\""""'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()"" >nul 2>nul"
 
-::done - Final display before launching
-call :t 100 "Finalizing installation..."
+:: Final wait to ensure everything is complete
+call :t 98 "Finalizing installation..."
 timeout /t 2 /nobreak >nul
+
+::done - Final display
+call :t 100 "Complete!"
+timeout /t 1 /nobreak >nul
 
 call :h
 echo.
-echo  !e![92mUnblockR installed successfully!!e![0m
+echo  !e![92m╔════════════════════════════════════════╗!e![0m
+echo  !e![92m║     UnblockR installed successfully!    ║!e![0m
+echo  !e![92m╚════════════════════════════════════════╝!e![0m
 echo.
-echo  !e![96mUnblockR will launch in 3 seconds...!e![0m
-echo  You can also find it in the Start Menu by typing "UnblockR"
+echo  !e![96m► The application will launch in 3 seconds!e![0m
+echo  !e![90m► You can also find it in the Start Menu by typing "UnblockR"!e![0m
 echo.
-echo  Installation path: !e![90m%id%!e![0m
+echo  !e![90mInstallation path: %id%!e![0m
 echo.
 timeout /t 3 /nobreak >nul
 
@@ -259,5 +261,4 @@ start "" wscript.exe "%id%\launcher.vbs"
 
 :: Cleanup
 del "%installer_flag%" >nul 2>nul
-timeout /t 2 /nobreak >nul
 exit /b 0
