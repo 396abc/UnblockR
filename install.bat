@@ -18,11 +18,11 @@ goto m
 :h
 cls
 echo.
-echo   _   _       _     _            _    %e%[94m ____%e%[0m
-echo  ^| ^| ^| ^|_ __ ^| ^|__ ^| ^| ___   ___^| ^| _%e%[94m^|  _ \%e%[0m
-echo  ^| ^| ^| ^| '_ \^| '_ \^| ^|/ _ \ / __^| ^|/ /%e%[94m ^|_) ^|%e%[0m
-echo  ^| ^|_^| ^| ^| ^| ^| ^|_) ^| ^| (_) ^| (__^|   ^<%e%[94m^|  _ ^<%e%[0m
-echo   \___/^|_^| ^|_^|_.__/^|_^|\___/ \___^|_^|\_\%e%[94m_^| \_\%e%[0m
+echo   _   _       _     _            _    !e![94m ____!e![0m
+echo  ^| ^| ^| ^|_ __ ^| ^|__ ^| ^| ___   ___^| ^| _!e![94m^|  _ \!e![0m
+echo  ^| ^| ^| ^| '_ \^| '_ \^| ^|/ _ \ / __^| ^|/ /!e![94m ^|_) ^|!e![0m
+echo  ^| ^|_^| ^| ^| ^| ^| ^|_) ^| ^| (_) ^| (__^|   ^<!e![94m^|  _ ^<!e![0m
+echo   \___/^|_^| ^|_^|_.__/^|_^|\___/ \___^|_^|\_\!e![94m_^| \_\!e![0m
 echo.
 goto :eof
 
@@ -49,7 +49,7 @@ if !j! lss %l% (
     goto bl2
 )
 call :h
-echo  [%e%[94m!br!%e%[0m!em!] %p%%% %mg%!dd!
+echo  [!e![94m!br!!e![0m!em!] %p%%% %mg%!dd!
 goto :eof
 
 :t
@@ -68,19 +68,19 @@ goto :eof
 
 :f
 call :h
-echo  %e%[91m[FAIL] %~1%e%[0m
+echo  !e![91m[FAIL] %~1!e![0m
 echo.
-echo  %e%[91mPress any key to exit...%e%[0m
+echo  !e![91mPress any key to exit...!e![0m
 pause >nul
 exit /b 1
 
-::main 
+::main
 
 :m
 call :t 0 "Booting up"
 timeout /t 1 >nul
 
-::python check 
+::python check
 
 call :t 5 "Checking environment"
 python --version >nul 2>nul
@@ -112,7 +112,7 @@ if %errorlevel% neq 0 call :f "Runtime not detected after install. Reboot and tr
 for /f "tokens=*" %%i in ('python --version 2^>^&1') do set pv=%%i
 call :t 10 "Runtime locked in"
 
-::packages 
+::packages
 
 :pk
 set pf=0
@@ -193,7 +193,7 @@ powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = 
 
 call :t 95 "Almost there"
 
-::done 
+::done
 
 call :bs 100 "Done!"
 echo.
