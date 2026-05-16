@@ -27,17 +27,13 @@ APP_DIR   = Path(os.path.dirname(os.path.abspath(__file__)))
 ICON_PATH = APP_DIR / "UnblockR.ico"
 LOGO_PATH = APP_DIR / "UnblockR.png"
 
-REPO_BASE = "https://github.com/396abc/UnblockR/raw/refs/heads/main"
-LOGO_URL  = "https://raw.githubusercontent.com/396abc/UnblockR/main/UnblockR.png"
-
-FILES = {
-    "main.py":              f"{REPO_BASE}/main.py",
-    "updater.py":           f"{REPO_BASE}/updater.py",
-    "launcher.vbs":         f"{REPO_BASE}/launcher.vbs",
-    "updater_launcher.vbs": f"{REPO_BASE}/updater_launcher.vbs",
-    "UnblockR.ico":         f"{REPO_BASE}/UnblockR.ico",
-    "UnblockR.png":         LOGO_URL,
-}
+REPO_OWNER = "396abc"
+REPO_NAME  = "UnblockR"
+REPO_BRANCH = "main"
+REPO_BASE  = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/raw/refs/heads/{REPO_BRANCH}"
+LOGO_URL   = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/UnblockR.png"
+TREE_API   = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/git/trees/{REPO_BRANCH}?recursive=1"
+EXCLUSIONS_URL = f"{REPO_BASE}/upd.exclusions"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("UnblockR.Updater")
@@ -72,6 +68,55 @@ def fetch_remote_version():
         log.warning(f"fetch_remote_version: {e}")
     return None
 
+def fetch_exclusions():
+    """Fetch upd.exclusions from repo. Returns set of excluded names, or None on failure."""
+    try:
+        ts = int(time.time())
+        req = urllib.request.urlopen(f"{EXCLUSIONS_URL}?t={ts}", timeout=15)
+        lines = req.read().decode("utf-8", errors="ignore").splitlines()
+        exclusions = set()
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                exclusions.add(line)
+        log.info(f"Exclusions loaded: {exclusions}")
+        return exclusions
+    except Exception as e:
+        log.error(f"fetch_exclusions: {e}")
+        return None
+
+def fetch_repo_tree():
+    """Fetch all file paths from the repo using GitHub tree API."""
+    try:
+        req = urllib.request.Request(TREE_API, headers={"User-Agent": "UnblockR-Updater"})
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read().decode("utf-8"))
+        files = []
+        for item in data.get("tree", []):
+            if item.get("type") == "blob":
+                files.append(item["path"])
+        log.info(f"Repo tree: {len(files)} files found")
+        return files
+    except Exception as e:
+        log.error(f"fetch_repo_tree: {e}")
+        return None
+
+def is_excluded(filepath, exclusions):
+    """Check if a file path matches any exclusion. Exclusions match against
+    the full path or any directory component in the path."""
+    parts = Path(filepath).parts
+    for exc in exclusions:
+        # exact full path match
+        if filepath == exc:
+            return True
+        # matches filename
+        if parts[-1] == exc:
+            return True
+        # matches any directory in the path
+        if exc in parts[:-1]:
+            return True
+    return False
+
 def download_file(url, dest: Path, progress_cb=None):
     try:
         req = urllib.request.urlopen(url, timeout=20)
@@ -86,6 +131,7 @@ def download_file(url, dest: Path, progress_cb=None):
             done += len(chunk)
             if progress_cb and total:
                 progress_cb(done / total)
+        dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
         return True
     except Exception as e:
@@ -96,43 +142,69 @@ def download_file(url, dest: Path, progress_cb=None):
 class UpdaterAPI:
     def __init__(self):
         self._window = None
+        self._exclusions = None
+        self._repo_files = None
+        self._can_update = False
 
     def startup(self):
-        local   = get_local_version()
-        remote  = fetch_remote_version()
-        update  = remote is not None and remote != local
+        local  = get_local_version()
+        remote = fetch_remote_version()
+
+        # prefetch exclusions and repo tree
+        self._exclusions = fetch_exclusions()
+        self._repo_files = fetch_repo_tree()
+
+        if self._exclusions is not None and self._repo_files is not None:
+            self._can_update = True
+        else:
+            self._can_update = False
+
+        update = remote is not None and remote != local
         return {
-            "logo":           logo_b64(),
-            "local_version":  local,
-            "remote_version": remote or "unavailable",
+            "logo":             logo_b64(),
+            "local_version":    local,
+            "remote_version":   remote or "unavailable",
             "update_available": update,
+            "can_update":       self._can_update,
         }
 
     def perform_update(self):
-        """Download all files, report progress to JS."""
+        """Download all non-excluded files from repo."""
         def run():
-            names  = list(FILES.keys())
-            total  = len(names)
+            if not self._can_update:
+                self._js('setProgress(0, "Cannot update: failed to fetch file list or exclusions")')
+                time.sleep(2)
+                self._js('updateFailed()')
+                return
+
+            # filter files
+            all_files = [f for f in self._repo_files if not is_excluded(f, self._exclusions)]
+            total = len(all_files)
             errors = []
 
-            for i, name in enumerate(names):
-                url  = FILES[name]
-                dest = APP_DIR / name
-                msg  = f"Downloading {name}..."
-                self._js(f'setProgress({int((i/total)*90)}, "{msg}")')
+            log.info(f"Updating {total} files ({len(self._repo_files) - total} excluded)")
+
+            for i, filepath in enumerate(all_files):
+                url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}/{filepath}"
+                dest = APP_DIR / filepath
+                display_name = filepath if "/" in filepath else filepath
+                msg = f"Downloading {display_name}..."
+                pct = int((i / total) * 90)
+                self._js(f'setProgress({pct}, "{msg}")')
                 log.info(msg)
 
                 ok = download_file(url, dest)
                 if not ok:
-                    errors.append(name)
-                    self._js(f'setProgress({int((i/total)*90)}, "Warning: {name} failed, skipping...")')
+                    errors.append(filepath)
+                    self._js(f'setProgress({pct}, "Warning: {display_name} failed, skipping...")')
                     time.sleep(0.4)
                     continue
 
-                time.sleep(0.15)
+                time.sleep(0.1)
 
             if errors:
-                self._js(f'setProgress(90, "Some files failed: {", ".join(errors)}")')
+                err_str = ", ".join(errors)
+                self._js(f'setProgress(90, "Some files failed: {err_str}")')
                 time.sleep(0.8)
 
             new_ver = get_local_version()
@@ -154,12 +226,9 @@ class UpdaterAPI:
         os._exit(0)
 
     def go_back(self):
-        """Close updater and reopen main window."""
         try:
-            # Tell main.py to show itself again via a flag file
             flag = APP_DIR / ".reopen_main"
             flag.touch()
-            # Launch main via its launcher
             vbs = APP_DIR / "launcher.vbs"
             if vbs.exists():
                 subprocess.Popen(["wscript.exe", str(vbs)], shell=False)
@@ -214,8 +283,6 @@ HTML = r"""<!DOCTYPE html>
     background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
     pointer-events: none; z-index: 999; opacity: 0.35;
   }
-
-  /* titlebar */
   .titlebar {
     height: 46px; background: var(--surface);
     border-bottom: 1px solid var(--border);
@@ -238,13 +305,10 @@ HTML = r"""<!DOCTYPE html>
     transition:all 0.15s;
   }
   .close-btn:hover { background:rgba(229,80,80,0.15); border-color:var(--off); color:var(--off); }
-
-  /* main content */
   .body {
     flex:1; display:flex; align-items:center;
     justify-content:center; padding:32px;
   }
-
   .card {
     background: var(--surface); border:1px solid var(--border);
     border-radius:16px; padding:36px 40px;
@@ -253,34 +317,25 @@ HTML = r"""<!DOCTYPE html>
     transition: opacity 0.4s ease, transform 0.4s ease;
   }
   .card.visible { opacity:1; transform:translateY(0); }
-
   .card-logo {
     width:64px; height:64px; object-fit:contain;
     margin:0 auto 20px;
     animation: float 3s ease-in-out infinite;
   }
   @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
-
   .card-title {
     font-family:var(--display); font-size:22px; font-weight:800;
     color:var(--text); margin-bottom:4px;
   }
   .card-title .r { color:var(--accent); }
-
   .card-sub { font-size:11px; color:var(--muted); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:28px; }
-
-  /* version row */
-  .ver-row {
-    display:flex; gap:12px; margin-bottom:24px;
-  }
+  .ver-row { display:flex; gap:12px; margin-bottom:24px; }
   .ver-box {
     flex:1; background:var(--raised); border:1px solid var(--border);
     border-radius:10px; padding:14px;
   }
   .ver-label { font-size:10px; color:var(--muted); letter-spacing:0.1em; text-transform:uppercase; margin-bottom:6px; }
   .ver-val { font-family:var(--display); font-size:18px; font-weight:700; color:var(--text); }
-
-  /* status badge */
   .badge {
     display:inline-flex; align-items:center; gap:6px;
     padding:6px 14px; border-radius:100px;
@@ -289,10 +344,9 @@ HTML = r"""<!DOCTYPE html>
   .badge.up-to-date { background:rgba(0,229,160,0.1); border:1px solid rgba(0,229,160,0.25); color:var(--on); }
   .badge.update-avail { background:rgba(61,158,255,0.1); border:1px solid rgba(61,158,255,0.3); color:var(--accent); animation:pulse 2s infinite; }
   .badge.updating { background:rgba(61,158,255,0.08); border:1px solid rgba(61,158,255,0.2); color:var(--muted); }
+  .badge.error { background:rgba(229,80,80,0.1); border:1px solid rgba(229,80,80,0.25); color:var(--off); }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
   .badge-dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
-
-  /* progress */
   .progress-wrap { margin-bottom:24px; text-align:left; }
   .progress-track {
     height:4px; background:var(--border); border-radius:2px;
@@ -306,8 +360,6 @@ HTML = r"""<!DOCTYPE html>
   }
   .progress-msg { font-size:11px; color:var(--muted); }
   .progress-pct { font-size:11px; color:var(--accent); float:right; }
-
-  /* buttons */
   .btns { display:flex; gap:10px; justify-content:center; }
   .btn {
     padding:12px 24px; border-radius:9px;
@@ -323,7 +375,6 @@ HTML = r"""<!DOCTYPE html>
   .btn-secondary { background:var(--raised); color:var(--muted); }
   .btn-secondary:hover { color:var(--text); transform:translateY(-1px); }
   .btn:disabled { opacity:0.4; pointer-events:none; }
-
   .spinner {
     width:18px; height:18px;
     border:2px solid var(--border);
@@ -415,6 +466,11 @@ HTML = r"""<!DOCTYPE html>
     setButtons('<button class="btn btn-primary" onclick="launchMain()">Launch UnblockR</button>');
   }
 
+  function updateFailed() {
+    setBadge('error', 'Update failed');
+    setButtons('<button class="btn btn-secondary" onclick="launchMain()">Launch anyway</button><button class="btn btn-secondary" onclick="doClose()">Close</button>');
+  }
+
   async function boot() {
     let result;
     try { result = await pywebview.api.startup(); }
@@ -434,6 +490,12 @@ HTML = r"""<!DOCTYPE html>
     if (!result.update_available) {
       setBadge('up-to-date', 'You are up to date');
       setButtons('<button class="btn btn-primary" onclick="launchMain()">Launch UnblockR</button><button class="btn btn-secondary" onclick="doClose()">Close</button>');
+      return;
+    }
+
+    if (!result.can_update) {
+      setBadge('error', 'Cannot fetch update manifest');
+      setButtons('<button class="btn btn-secondary" onclick="launchMain()">Launch anyway</button><button class="btn btn-secondary" onclick="doClose()">Close</button>');
       return;
     }
 
