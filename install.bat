@@ -13,7 +13,7 @@ for /f "delims=" %%a in ('forfiles /p "%~dp0." /m "%~nx0" /c "cmd /c echo 0x1B"'
 set "installer_flag=%TEMP%\ubr_installer_running.flag"
 if exist "%installer_flag%" (
     echo Installer is already running...
-    ping 127.0.0.1 -n 2 >nul
+    timeout /t 2 /nobreak >nul
     exit /b 0
 )
 echo %DATE% %TIME% > "%installer_flag%"
@@ -99,14 +99,14 @@ if !elapsed! geq 15 (
     if !dc! equ 2 call :b !rp! "!rmsg!.. "
     if !dc! equ 3 call :b !rp! "!rmsg!..."
 )
-ping 127.0.0.1 -n 2 >nul
+timeout /t 1 /nobreak >nul
 goto runloop
 
-::simple task (no animation, just display)
+::simple task
 
 :t
 call :b %~1 "%~2"
-ping 127.0.0.1 -n 2 >nul
+timeout /t 1 /nobreak >nul
 goto :eof
 
 ::error
@@ -131,7 +131,7 @@ echo Installing Python 3.13 via winget. This may take a moment...
 winget install -e --id Python.Python.3.13 --accept-source-agreements --silent
 
 :: Wait for installation to finalize
-ping 127.0.0.1 -n 4 >nul
+timeout /t 3 /nobreak >nul
 
 :: Update PATH to include Python paths
 set "PATH=%PATH%;C:\Program Files\Python313\Scripts;C:\Program Files\Python313;C:\Program Files\Python313\Lib\site-packages\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313\Scripts;C:\Users\%USERNAME%\AppData\Local\Programs\Python\Python313"
@@ -169,8 +169,7 @@ goto :eof
 :: Refresh PATH without requiring restart
 for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "syspath=%%b"
 for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "userpath=%%b"
-if defined syspath set "PATH=%syspath%"
-if defined userpath set "PATH=%PATH%;%userpath%"
+set "PATH=%syspath%;%userpath%"
 goto :eof
 
 ::main
@@ -188,7 +187,7 @@ if !errorlevel! equ 0 (
     call :install_python_auto
 )
 
-::packages - each will wait its turn
+::packages
 set pf=0
 
 call :run_wait 20 "Installing pywebview" "python -c \"import webview\" 2>nul || pip install pywebview --upgrade -q 2>nul || python -m pip install pywebview --upgrade -q 2>nul"
@@ -231,18 +230,14 @@ if %df% equ 1 call :f "Download failed. Check your internet connection."
 
 ::shortcuts
 
-call :run_wait 90 "Creating shortcuts" "powershell -NoProfile -Command \"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\\\"\"\"%id%\launcher.vbs\\\"\"\"'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()\" >nul 2>nul"
+call :run_wait 90 "Creating shortcuts" "powershell -NoProfile -Command \"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%id%\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"\"\"%id%\launcher.vbs\"\"\"'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()\" >nul 2>nul"
 
 if not exist "%sm%\UnblockR" mkdir "%sm%\UnblockR" >nul 2>nul
-call :run_wait 95 "Adding to Start Menu" "powershell -NoProfile -Command \"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\\\"\"\"%id%\launcher.vbs\\\"\"\"'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()\" >nul 2>nul"
-
-:: Final wait to ensure everything is complete
-call :t 98 "Finalizing installation..."
-ping 127.0.0.1 -n 3 >nul
+call :run_wait 95 "Adding to Start Menu" "powershell -NoProfile -Command \"$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%sm%\UnblockR\UnblockR.lnk'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"\"\"%id%\launcher.vbs\"\"\"'; $s.WorkingDirectory = '%id%'; $s.IconLocation = '%id%\UnblockR.ico'; $s.Description = 'UnblockR'; $s.Save()\" >nul 2>nul"
 
 ::done - Final display
-call :t 100 "Complete!"
-ping 127.0.0.1 -n 2 >nul
+call :t 100 "Done!"
+timeout /t 2 /nobreak >nul
 
 call :h
 echo.
@@ -253,7 +248,7 @@ echo  !e![90mYou can also find it in the Start Menu by typing "UnblockR"!e![0m
 echo.
 echo  !e![90mInstallation path: %id%!e![0m
 echo.
-ping 127.0.0.1 -n 4 >nul
+timeout /t 3 /nobreak >nul
 
 :: Launch the application
 start "" wscript.exe "%id%\launcher.vbs"
