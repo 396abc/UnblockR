@@ -1340,7 +1340,7 @@ HTML = r"""<!DOCTYPE html>
         document.getElementById('auth-screen').classList.remove('visible');
         document.getElementById('app').classList.add('visible');
       } else {
-        const msgs = {s
+        const msgs = {
           invalid_credentials: 'Incorrect username or password.',
           username_taken: 'Username already taken.',
           no_subscription: 'Account created — contact admin.',
